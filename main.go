@@ -157,6 +157,8 @@ func daemon(fs *flag.FlagSet) error {
 		_ = logFile.file.Close()
 	}()
 
+	log.SetOutput(logFile)
+
 	child := exec.CommandContext(ctx, fs.Arg(0), fs.Args()[1:]...)
 
 	if *socketPath == "-" {
@@ -171,19 +173,28 @@ func daemon(fs *flag.FlagSet) error {
 			_ = listener.Close()
 		}()
 
-		cm := newConnManager(ctx, onNewConns, logFile)
-		defer cm.waitUntilClosed()
+		stdinPipe, err := child.StdinPipe()
+		if err != nil {
+			return err
+		}
 
-		rw := &maybeReaderWriter{
+		cm := newConnManager(ctx, connManagerConfig{
+			newConns: onNewConns,
+			file:     logFile,
+			writeTo:  stdinPipe,
+		})
+		defer cm.close()
+
+		writer := &writerProxy{
 			ctx:     ctx,
-			onRead:  cm.readEvents(),
 			onWrite: cm.writeEvents(),
 		}
 
-		child.Stdin = rw
-		child.Stderr = rw
-		child.Stdout = rw
+		child.Stderr = writer
+		child.Stdout = writer
 	}
+
+	log.Printf("executing: '%s'...", child.String())
 
 	err = child.Run()
 	if err != nil {
@@ -226,13 +237,18 @@ func newCtlSocket(ctx context.Context, filePath string, mode os.FileMode) (net.L
 	return listener, newConns, nil
 }
 
-func newConnManager(ctx context.Context, newConns <-chan net.Conn, file *managedFile) *connManager {
+type connManagerConfig struct {
+	newConns <-chan net.Conn
+	file     *managedFile
+	writeTo  io.Writer
+}
+
+func newConnManager(ctx context.Context, config connManagerConfig) *connManager {
 	cm := &connManager{
-		newConns:  newConns,
-		readReqs:  make(chan rwEvent),
+		config:    config,
 		writeReqs: make(chan rwEvent),
 		done:      make(chan struct{}),
-		file:      file,
+		wait:      make(chan struct{}),
 	}
 
 	go cm.manageConns(ctx)
@@ -241,19 +257,18 @@ func newConnManager(ctx context.Context, newConns <-chan net.Conn, file *managed
 }
 
 type connManager struct {
-	newConns  <-chan net.Conn
-	readReqs  chan rwEvent
+	config    connManagerConfig
 	writeReqs chan rwEvent
+	once      sync.Once
 	done      chan struct{}
-	file      *managedFile
+	wait      chan struct{}
 }
 
-func (o *connManager) waitUntilClosed() {
-	<-o.done
-}
-
-func (o *connManager) readEvents() chan<- rwEvent {
-	return o.readReqs
+func (o *connManager) close() {
+	o.once.Do(func() {
+		close(o.done)
+		<-o.wait
+	})
 }
 
 func (o *connManager) writeEvents() chan<- rwEvent {
@@ -262,26 +277,23 @@ func (o *connManager) writeEvents() chan<- rwEvent {
 
 func (o *connManager) manageConns(ctx context.Context) {
 	var currentConn net.Conn
-	var queuedConnRead *rwEvent
-	closeCurrentConn := make(chan error, 1)
+	defer func() {
+		if currentConn != nil {
+			_ = currentConn.SetWriteDeadline(time.Now().Add(time.Second))
+			_, _ = currentConn.Write([]byte("daemon is shutting down - " +
+				ctx.Err().Error() + "\n"))
+			_ = currentConn.Close()
+		}
+		close(o.wait)
+	}()
 
 	for {
 		select {
 		case <-ctx.Done():
-			if currentConn != nil {
-				_ = currentConn.SetWriteDeadline(time.Now().Add(time.Second))
-				_, _ = currentConn.Write([]byte("daemon is shutting down - " +
-					ctx.Err().Error() + "\n"))
-				_ = currentConn.Close()
-			}
-			close(o.done)
 			return
-		case <-closeCurrentConn:
-			if currentConn != nil {
-				_ = currentConn.Close()
-				currentConn = nil
-			}
-		case newConn := <-o.newConns:
+		case <-o.done:
+			return
+		case newConn := <-o.config.newConns:
 			if currentConn != nil {
 				_ = currentConn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 				_, _ = currentConn.Write([]byte("a new client has connected\n"))
@@ -289,37 +301,17 @@ func (o *connManager) manageConns(ctx context.Context) {
 				currentConn = nil
 			}
 
-			_, err := newConn.Write(o.file.buffered())
+			_, err := newConn.Write(o.config.file.buffered())
 			if err != nil {
 				_ = newConn.Close()
 				continue
 			}
 
-			if queuedConnRead != nil {
-				go asyncRead(newConn, *queuedConnRead, closeCurrentConn)
-				queuedConnRead = nil
-			}
+			go io.Copy(o.config.writeTo, newConn)
 
 			currentConn = newConn
-		case read := <-o.readReqs:
-			if currentConn == nil {
-				queuedConnRead = &read
-				continue
-			}
-
-			if queuedConnRead != nil {
-				select {
-				case queuedConnRead.cb <- rwEventResult{
-					err: errors.New("a read has already been queued"),
-				}:
-				default:
-				}
-				queuedConnRead = nil
-			}
-
-			go asyncRead(currentConn, read, closeCurrentConn)
 		case write := <-o.writeReqs:
-			n, err := o.file.Write(write.b)
+			n, err := o.config.file.Write(write.b)
 			write.cb <- rwEventResult{
 				n:   n,
 				err: err,
@@ -336,23 +328,8 @@ func (o *connManager) manageConns(ctx context.Context) {
 	}
 }
 
-func asyncRead(reader io.Reader, event rwEvent, onErr chan error) {
-	n, err := reader.Read(event.b)
-	event.cb <- rwEventResult{
-		n: n,
-		// Do not send error back to caller because an error
-		// may cause the child process to exit, or for the
-		// Go standard library to do something to the child
-		// process' stdin state.
-	}
-	if err != nil {
-		onErr <- err
-	}
-}
-
-type maybeReaderWriter struct {
+type writerProxy struct {
 	ctx     context.Context
-	onRead  chan<- rwEvent
 	onWrite chan<- rwEvent
 }
 
@@ -366,27 +343,7 @@ type rwEventResult struct {
 	err error
 }
 
-func (o *maybeReaderWriter) Read(b []byte) (int, error) {
-	cb := make(chan rwEventResult, 1)
-
-	select {
-	case o.onRead <- rwEvent{
-		b:  b,
-		cb: cb,
-	}:
-	case <-o.ctx.Done():
-		return 0, o.ctx.Err()
-	}
-
-	select {
-	case result := <-cb:
-		return result.n, result.err
-	case <-o.ctx.Done():
-		return 0, o.ctx.Err()
-	}
-}
-
-func (o *maybeReaderWriter) Write(b []byte) (int, error) {
+func (o *writerProxy) Write(b []byte) (int, error) {
 	cb := make(chan rwEventResult, 1)
 
 	select {
