@@ -161,6 +161,7 @@ func daemon(fs *flag.FlagSet) error {
 		_ = logFile.file.Close()
 	}()
 
+	log.SetPrefix(fmt.Sprintf("[%s] ", appName))
 	log.SetOutput(logFile)
 
 	err = os.Chdir(*workingDirPath)
