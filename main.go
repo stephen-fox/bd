@@ -435,23 +435,22 @@ type managedFile struct {
 func (o *managedFile) truncateFileLoop(ctx context.Context) {
 	ticker := time.NewTicker(time.Hour)
 
-loop:
-	select {
-	case <-ctx.Done():
-		ticker.Stop()
-		_ = o.file.Close()
-		return
-	case <-ticker.C:
-		info, err := o.file.Stat()
-		if err != nil {
-			goto loop
-		}
+	for {
+		select {
+		case <-ctx.Done():
+			ticker.Stop()
+			_ = o.file.Close()
+			return
+		case <-ticker.C:
+			info, err := o.file.Stat()
+			if err != nil {
+				continue
+			}
 
-		if info.Size() > o.maxFileBytes {
-			_ = o.truncate()
+			if info.Size() > o.maxFileBytes {
+				_ = o.truncate()
+			}
 		}
-
-		goto loop
 	}
 }
 
