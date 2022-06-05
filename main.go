@@ -129,6 +129,10 @@ func daemon(fs *flag.FlagSet) error {
 		&socketMode,
 		"m",
 		"The socket's file mode")
+	workingDirPath := fs.String(
+		"w",
+		"",
+		"The working directory to use")
 	logFilePath := fs.String(
 		"o",
 		"",
@@ -158,6 +162,11 @@ func daemon(fs *flag.FlagSet) error {
 	}()
 
 	log.SetOutput(logFile)
+
+	err = os.Chdir(*workingDirPath)
+	if err != nil {
+		return fmt.Errorf("failed to change current working directory - %w", err)
+	}
 
 	child := exec.CommandContext(ctx, fs.Arg(0), fs.Args()[1:]...)
 
