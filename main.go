@@ -1,4 +1,4 @@
-// snoozled (pronounced "sch noozle dee") is program that helps daemonize
+// snoozled (pronounced "sch noozle dee") is a program that helps daemonize
 // other programs, specifically programs that use stdin as an interactive
 // admin interface.
 package main
