@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/stephen-fox/goss"
@@ -152,6 +153,10 @@ func daemon(fs *flag.FlagSet) error {
 		"d",
 		"",
 		"The working directory to use")
+	runAsUser := fs.String(
+		"u",
+		"",
+		"Optionally run as a specific user (only supported on Unix systems)")
 	pidFilePath := fs.String(
 		"p",
 		"",
@@ -184,13 +189,39 @@ func daemon(fs *flag.FlagSet) error {
 	const childEnvName = appName + "_" + "child"
 	isChild := os.Getenv(childEnvName) != "" || *foreground
 	if !isChild {
+		var childSysProcAttr *syscall.SysProcAttr
+		if *runAsUser != "" {
+			var err error
+			childSysProcAttr, err = osspecific.SysProcAttrForChildProc(*runAsUser)
+			if err != nil {
+				return fmt.Errorf("failed to get sys proc attr to user '%s' - %w",
+					*runAsUser, err)
+			}
+		}
+
 		us := exec.Command(os.Args[0], os.Args[1:]...)
 		us.Env = os.Environ()
 		us.Env = append(us.Env, childEnvName+"=true")
+		us.SysProcAttr = childSysProcAttr
 		err := us.Start()
 		if err != nil {
 			return fmt.Errorf("failed to exec to background - %w", err)
 		}
+
+		if *pidFilePath != "" {
+			_ = os.Remove(*pidFilePath)
+
+			err = os.WriteFile(
+				*pidFilePath,
+				[]byte(fmt.Sprintf("%d\n", us.Process.Pid)),
+				0600)
+			if err != nil {
+				_ = us.Process.Kill()
+				return fmt.Errorf("failed to write pid file '%s' - %w",
+					*pidFilePath, err)
+			}
+		}
+
 		return nil
 	}
 
@@ -205,21 +236,6 @@ func daemon(fs *flag.FlagSet) error {
 
 	log.SetPrefix(fmt.Sprintf("[%s] ", appName))
 	log.SetOutput(logFile)
-
-	if *pidFilePath != "" {
-		_ = os.Remove(*pidFilePath)
-
-		err = os.WriteFile(
-			*pidFilePath,
-			[]byte(fmt.Sprintf("%d\n", os.Getpid())),
-			0600)
-		if err != nil {
-			return fmt.Errorf("failed to create pid file '%s' - %w", *pidFilePath, err)
-		}
-		defer func() {
-			_ = os.Remove(*pidFilePath)
-		}()
-	}
 
 	if *workingDirPath != "" {
 		err = os.Chdir(*workingDirPath)
