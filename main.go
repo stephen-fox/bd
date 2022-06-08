@@ -78,6 +78,12 @@ func runApp() error {
 }
 
 func client(fs *flag.FlagSet) error {
+	waitForSocketToClose := fs.Bool(
+		"w",
+		false,
+		"Do not exit if stdin is closed (useful for writing to stdin in a shell,\n"+
+			"closing it, and waiting until the daemon shuts down)")
+
 	_ = fs.Parse(os.Args[2:])
 
 	if fs.NArg() == 0 {
@@ -101,7 +107,9 @@ func client(fs *flag.FlagSet) error {
 	done := make(chan error, 1)
 	go func() {
 		_, err := io.Copy(conn, os.Stdin)
-		done <- err
+		if !*waitForSocketToClose {
+			done <- err
+		}
 	}()
 
 	go func() {
