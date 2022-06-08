@@ -43,8 +43,13 @@ options:
 `
 )
 
+var closeLogFn func() error
+
 func main() {
 	err := runApp()
+	if closeLogFn != nil {
+		_ = closeLogFn()
+	}
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -165,9 +170,7 @@ func daemon(fs *flag.FlagSet) error {
 	if err != nil {
 		return fmt.Errorf("failed to start log file writer - %w", err)
 	}
-	defer func() {
-		_ = logFile.file.Close()
-	}()
+	closeLogFn = logFile.file.Close
 
 	log.SetPrefix(fmt.Sprintf("[%s] ", appName))
 	log.SetOutput(logFile)
