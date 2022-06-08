@@ -269,7 +269,7 @@ func newConnManager(ctx context.Context, config connManagerConfig) *connManager 
 		wait:      make(chan struct{}),
 	}
 
-	go cm.manageConns(ctx)
+	go cm.manageConnsLoop(ctx)
 
 	return cm
 }
@@ -293,7 +293,7 @@ func (o *connManager) writeEvents() chan<- rwEvent {
 	return o.writeReqs
 }
 
-func (o *connManager) manageConns(ctx context.Context) {
+func (o *connManager) manageConnsLoop(ctx context.Context) {
 	var currentConn net.Conn
 	defer func() {
 		if currentConn != nil {
