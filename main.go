@@ -138,7 +138,7 @@ func daemon(fs *flag.FlagSet) error {
 		"m",
 		"The socket's file mode")
 	workingDirPath := fs.String(
-		"w",
+		"d",
 		"",
 		"The working directory to use")
 	logFilePath := fs.String(
