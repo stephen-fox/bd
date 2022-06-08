@@ -194,7 +194,7 @@ func daemon(fs *flag.FlagSet) error {
 			var err error
 			childSysProcAttr, err = osspecific.SysProcAttrForChildProc(*runAsUser)
 			if err != nil {
-				return fmt.Errorf("failed to get sys proc attr to user '%s' - %w",
+				return fmt.Errorf("failed to get sys proc attr for user '%s' - %w",
 					*runAsUser, err)
 			}
 		}
