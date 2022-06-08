@@ -15,7 +15,9 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -131,6 +133,10 @@ func client(fs *flag.FlagSet) error {
 }
 
 func daemon(fs *flag.FlagSet) error {
+	foreground := fs.Bool(
+		"",
+		false,
+		"Do not exec into background / stay in foreground")
 	socketPath := fs.String(
 		"l",
 		"",
@@ -146,6 +152,10 @@ func daemon(fs *flag.FlagSet) error {
 		"d",
 		"",
 		"The working directory to use")
+	pidFilePath := fs.String(
+		"p",
+		"",
+		"Optionally create a PID file at this file path")
 	logFilePath := fs.String(
 		"o",
 		"",
@@ -158,10 +168,31 @@ func daemon(fs *flag.FlagSet) error {
 	}
 
 	fs.VisitAll(func(f *flag.Flag) {
+		if strings.Contains(strings.ToLower(f.Usage), "optional") {
+			return
+		}
+
 		if f.Value.String() == "" {
 			log.Fatalf("please specify '-%s' - %s", f.Name, f.Usage)
 		}
 	})
+
+	if !path.IsAbs(os.Args[0]) {
+		return fmt.Errorf("executable path must be absolute - '%s' is a relative path", os.Args[0])
+	}
+
+	const childEnvName = appName + "_" + "child"
+	isChild := os.Getenv(childEnvName) != "" || *foreground
+	if !isChild {
+		us := exec.Command(os.Args[0], os.Args[1:]...)
+		us.Env = os.Environ()
+		us.Env = append(us.Env, childEnvName+"=true")
+		err := us.Start()
+		if err != nil {
+			return fmt.Errorf("failed to exec to background - %w", err)
+		}
+		return nil
+	}
 
 	ctx, cancelFn := signal.NotifyContext(context.Background(), osspecific.QuitSignals()...)
 	defer cancelFn()
@@ -175,9 +206,26 @@ func daemon(fs *flag.FlagSet) error {
 	log.SetPrefix(fmt.Sprintf("[%s] ", appName))
 	log.SetOutput(logFile)
 
-	err = os.Chdir(*workingDirPath)
-	if err != nil {
-		return fmt.Errorf("failed to change current working directory - %w", err)
+	if *pidFilePath != "" {
+		_ = os.Remove(*pidFilePath)
+
+		err = os.WriteFile(
+			*pidFilePath,
+			[]byte(fmt.Sprintf("%d\n", os.Getpid())),
+			0600)
+		if err != nil {
+			return fmt.Errorf("failed to create pid file '%s' - %w", *pidFilePath, err)
+		}
+		defer func() {
+			_ = os.Remove(*pidFilePath)
+		}()
+	}
+
+	if *workingDirPath != "" {
+		err = os.Chdir(*workingDirPath)
+		if err != nil {
+			return fmt.Errorf("failed to change current working directory - %w", err)
+		}
 	}
 
 	child := exec.CommandContext(ctx, fs.Arg(0), fs.Args()[1:]...)
@@ -217,7 +265,12 @@ func daemon(fs *flag.FlagSet) error {
 
 	log.Printf("executing: '%s'...", child.String())
 
-	err = child.Run()
+	err = child.Start()
+	if err != nil {
+		return fmt.Errorf("failed to start child process - %w", err)
+	}
+
+	err = child.Wait()
 	if err != nil {
 		return fmt.Errorf("child process exited with error - %w", err)
 	}
