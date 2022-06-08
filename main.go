@@ -135,9 +135,9 @@ func client(fs *flag.FlagSet) error {
 
 func daemon(fs *flag.FlagSet) error {
 	foreground := fs.Bool(
-		"",
+		"f",
 		false,
-		"Do not exec into background / stay in foreground")
+		"Stay in the foreground rather than exec'ing into background")
 	socketPath := fs.String(
 		"l",
 		"",
