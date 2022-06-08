@@ -161,7 +161,7 @@ func daemon(fs *flag.FlagSet) error {
 	ctx, cancelFn := signal.NotifyContext(context.Background(), osspecific.QuitSignals()...)
 	defer cancelFn()
 
-	logFile, err := startLogFileWriter(ctx, *logFilePath)
+	logFile, err := startManagedFile(ctx, *logFilePath)
 	if err != nil {
 		return fmt.Errorf("failed to start log file writer - %w", err)
 	}
@@ -381,7 +381,7 @@ func (o *writerProxy) Write(b []byte) (int, error) {
 	}
 }
 
-func startLogFileWriter(ctx context.Context, filePath string) (*managedFile, error) {
+func startManagedFile(ctx context.Context, filePath string) (*managedFile, error) {
 	logFile, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0600)
 	if err != nil {
 		return nil, err
