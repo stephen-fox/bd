@@ -200,6 +200,7 @@ func daemon(fs *flag.FlagSet) error {
 		}
 
 		restarted := exec.Command(os.Args[0], os.Args[1:]...)
+		restarted.Dir = *workingDirPath
 		restarted.Env = os.Environ()
 		restarted.Env = append(restarted.Env, childEnvName+"=true")
 		restarted.SysProcAttr = childSysProcAttr
@@ -236,13 +237,6 @@ func daemon(fs *flag.FlagSet) error {
 
 	log.SetPrefix(fmt.Sprintf("[%s] ", appName))
 	log.SetOutput(logFile)
-
-	if *workingDirPath != "" {
-		err = os.Chdir(*workingDirPath)
-		if err != nil {
-			return fmt.Errorf("failed to change current working directory - %w", err)
-		}
-	}
 
 	child := exec.CommandContext(ctx, fs.Arg(0), fs.Args()[1:]...)
 
