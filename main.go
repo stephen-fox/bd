@@ -199,11 +199,11 @@ func daemon(fs *flag.FlagSet) error {
 			}
 		}
 
-		us := exec.Command(os.Args[0], os.Args[1:]...)
-		us.Env = os.Environ()
-		us.Env = append(us.Env, childEnvName+"=true")
-		us.SysProcAttr = childSysProcAttr
-		err := us.Start()
+		restarted := exec.Command(os.Args[0], os.Args[1:]...)
+		restarted.Env = os.Environ()
+		restarted.Env = append(restarted.Env, childEnvName+"=true")
+		restarted.SysProcAttr = childSysProcAttr
+		err := restarted.Start()
 		if err != nil {
 			return fmt.Errorf("failed to exec to background - %w", err)
 		}
@@ -213,10 +213,10 @@ func daemon(fs *flag.FlagSet) error {
 
 			err = os.WriteFile(
 				*pidFilePath,
-				[]byte(fmt.Sprintf("%d\n", us.Process.Pid)),
+				[]byte(fmt.Sprintf("%d\n", restarted.Process.Pid)),
 				0600)
 			if err != nil {
-				_ = us.Process.Kill()
+				_ = restarted.Process.Kill()
 				return fmt.Errorf("failed to write pid file '%s' - %w",
 					*pidFilePath, err)
 			}
