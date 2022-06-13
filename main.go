@@ -360,16 +360,19 @@ func (o *connManager) writeEvents() chan<- rwEvent {
 }
 
 func (o *connManager) manageConnsLoop(ctx context.Context) {
-	var currentConn net.Conn
+	currentConns := make(map[net.Conn]struct{})
 	defer func() {
-		if currentConn != nil {
-			_ = currentConn.SetWriteDeadline(time.Now().Add(time.Second))
-			_, _ = currentConn.Write([]byte("daemon is shutting down - " +
+		for conn := range currentConns {
+			_ = conn.SetWriteDeadline(time.Now().Add(time.Second))
+			_, _ = conn.Write([]byte("daemon is shutting down - " +
 				ctx.Err().Error() + "\n"))
-			_ = currentConn.Close()
+			_ = conn.Close()
+			delete(currentConns, conn)
 		}
 		close(o.wait)
 	}()
+
+	closeConns := make(chan net.Conn)
 
 	for {
 		select {
@@ -378,22 +381,24 @@ func (o *connManager) manageConnsLoop(ctx context.Context) {
 		case <-o.done:
 			return
 		case newConn := <-o.config.newConns:
-			if currentConn != nil {
-				_ = currentConn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-				_, _ = currentConn.Write([]byte("a new client has connected\n"))
-				_ = currentConn.Close()
-				currentConn = nil
-			}
-
 			_, err := newConn.Write(o.config.file.buffered())
 			if err != nil {
 				_ = newConn.Close()
 				continue
 			}
 
-			go io.Copy(o.config.writeTo, newConn)
+			go func() {
+				_, _ = io.Copy(o.config.writeTo, newConn)
+				select {
+				case closeConns <- newConn:
+				case <-time.After(time.Second):
+				}
+			}()
 
-			currentConn = newConn
+			currentConns[newConn] = struct{}{}
+		case closeThis := <-closeConns:
+			_ = closeThis.Close()
+			delete(currentConns, closeThis)
 		case write := <-o.writeReqs:
 			n, err := o.config.file.Write(write.b)
 			write.cb <- rwEventResult{
@@ -401,11 +406,11 @@ func (o *connManager) manageConnsLoop(ctx context.Context) {
 				err: err,
 			}
 
-			if currentConn != nil {
-				_, connErr := currentConn.Write(write.b)
+			for conn := range currentConns {
+				_, connErr := conn.Write(write.b)
 				if connErr != nil {
-					_ = currentConn.Close()
-					currentConn = nil
+					_ = conn.Close()
+					delete(currentConns, conn)
 				}
 			}
 		}
