@@ -46,6 +46,11 @@ shared options:
 `
 )
 
+const (
+	noClientFlag uint8 = iota
+	bufferedOutputClientFlag
+)
+
 var closeLogFn func() error
 
 func main() {
@@ -91,6 +96,10 @@ func client(fs *flag.FlagSet) error {
 		false,
 		"Do not exit if stdin is closed (useful for writing to stdin in a shell,\n"+
 			"closing it, and waiting until the daemon shuts down)")
+	noBufferedOutput := fs.Bool(
+		"q",
+		false,
+		"Do not retrieve buffered output from daemon's child process")
 
 	_ = fs.Parse(os.Args[2:])
 
@@ -111,6 +120,16 @@ func client(fs *flag.FlagSet) error {
 
 	ctx, cancelFn := signal.NotifyContext(context.Background(), osspecific.QuitSignals()...)
 	defer cancelFn()
+
+	var clientFlags byte
+	if !*noBufferedOutput {
+		clientFlags |= bufferedOutputClientFlag
+	}
+
+	_, err = conn.Write([]byte{clientFlags})
+	if err != nil {
+		return fmt.Errorf("failed to write client flags to socket - %s", err)
+	}
 
 	done := make(chan error, 1)
 	go func() {
@@ -381,10 +400,18 @@ func (o *connManager) manageConnsLoop(ctx context.Context) {
 		case <-o.done:
 			return
 		case newConn := <-o.config.newConns:
-			_, err := newConn.Write(o.config.file.buffered())
-			if err != nil {
-				_ = newConn.Close()
-				continue
+			setDeadLineErr := newConn.SetReadDeadline(time.Now().Add(time.Second))
+			if setDeadLineErr == nil {
+				options := make([]byte, 1)
+				_, _ = newConn.Read(options)
+				if options[0]&bufferedOutputClientFlag != 0 {
+					_, err := newConn.Write(o.config.file.buffered())
+					if err != nil {
+						_ = newConn.Close()
+						continue
+					}
+				}
+				_ = newConn.SetReadDeadline(time.Time{})
 			}
 
 			go func() {
