@@ -42,7 +42,7 @@ usage:
   ` + appName + ` daemon [options] <child-program-path> [child-program-args]
   ` + appName + ` client [options] <daemon-socket-path>
 
-options:
+shared options:
 `
 )
 
