@@ -333,6 +333,7 @@ func newCtlSocket(ctx context.Context, filePath string, mode os.FileMode) (net.L
 
 			select {
 			case <-ctx.Done():
+				_ = conn.Close()
 				return
 			case newConns <- conn:
 			}
