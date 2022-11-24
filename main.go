@@ -548,16 +548,17 @@ func (o *managedFile) truncate() error {
 
 func (o *managedFile) buffered() []byte {
 	o.mu.Lock()
+	defer o.mu.Unlock()
 
 	b := make([]byte, o.buf.Len())
 	_, _ = o.buf.Read(b)
 
-	o.mu.Unlock()
 	return b
 }
 
 func (o *managedFile) Write(b []byte) (int, error) {
 	o.mu.Lock()
+	defer o.mu.Unlock()
 
 	n, err := o.file.Write(b)
 	o.buf.Write(b)
@@ -565,8 +566,6 @@ func (o *managedFile) Write(b []byte) (int, error) {
 	if o.buf.Len() > o.maxBufBytes {
 		_, _ = o.buf.Read(make([]byte, len(b)))
 	}
-
-	o.mu.Unlock()
 
 	return n, err
 }
