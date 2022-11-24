@@ -206,6 +206,7 @@ func daemon(fs *flag.FlagSet) error {
 	}
 
 	const childEnvName = appName + "_" + "child"
+
 	isChild := os.Getenv(childEnvName) != "" || *foreground
 	if !isChild {
 		var childSysProcAttr *syscall.SysProcAttr
@@ -252,6 +253,7 @@ func daemon(fs *flag.FlagSet) error {
 	if err != nil {
 		return fmt.Errorf("failed to start log file writer - %w", err)
 	}
+
 	closeLogFn = logFile.file.Close
 
 	log.SetPrefix(fmt.Sprintf("[%s] ", appName))
@@ -480,7 +482,7 @@ func (o *writerProxy) Write(b []byte) (int, error) {
 }
 
 func startManagedFile(ctx context.Context, filePath string) (*managedFile, error) {
-	logFile, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0600)
+	file, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0600)
 	if err != nil {
 		return nil, err
 	}
@@ -489,7 +491,7 @@ func startManagedFile(ctx context.Context, filePath string) (*managedFile, error
 		maxFileBytes: 100_000_000,
 		maxBufBytes:  4096,
 		buf:          bytes.NewBuffer(nil),
-		file:         logFile,
+		file:         file,
 	}
 
 	go w.truncateFileLoop(ctx)
