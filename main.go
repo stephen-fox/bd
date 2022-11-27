@@ -273,12 +273,12 @@ func daemon(fs *flag.FlagSet) error {
 			child.Stdout = logFile
 		}
 	} else {
-		listener, onNewConns, err := newCtlSocket(ctx, *socketPath, socketMode.mode)
+		accepts, closeListener, err := newCtlSocket(ctx, *socketPath, socketMode.mode)
 		if err != nil {
 			return fmt.Errorf("failed to start ipc listner - %w", err)
 		}
 		defer func() {
-			_ = listener.Close()
+			_ = closeListener.Close()
 		}()
 
 		stdinPipe, err := child.StdinPipe()
@@ -287,9 +287,9 @@ func daemon(fs *flag.FlagSet) error {
 		}
 
 		cm := newConnManager(ctx, connManagerConfig{
-			newConns: onNewConns,
-			logFile:  logFile,
-			writeTo:  stdinPipe,
+			accepts: accepts,
+			logFile: logFile,
+			writeTo: stdinPipe,
 		})
 		defer cm.close()
 
@@ -319,7 +319,7 @@ func daemon(fs *flag.FlagSet) error {
 	return nil
 }
 
-func newCtlSocket(ctx context.Context, filePath string, mode os.FileMode) (net.Listener, <-chan net.Conn, error) {
+func newCtlSocket(ctx context.Context, filePath string, mode os.FileMode) (<-chan acceptResult, io.Closer, error) {
 	listener, err := goss.Listen(goss.ListenConfig{
 		Path:          filePath,
 		SystemOptions: osspecific.SocketOptions(mode),
@@ -328,33 +328,39 @@ func newCtlSocket(ctx context.Context, filePath string, mode os.FileMode) (net.L
 		return nil, nil, err
 	}
 
-	newConns := make(chan net.Conn)
+	results := make(chan acceptResult)
 
 	go func() {
 		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				log.Printf("failed to accept client - %s", err)
-				// TODO: Tell conn manager.
-				return
-			}
+			var r acceptResult
+			r.conn, r.err = listener.Accept()
 
 			select {
 			case <-ctx.Done():
-				_ = conn.Close()
+				if r.conn != nil {
+					_ = r.conn.Close()
+				}
 				return
-			case newConns <- conn:
+			case results <- r:
+				if r.err != nil {
+					return
+				}
 			}
 		}
 	}()
 
-	return listener, newConns, nil
+	return results, listener, nil
+}
+
+type acceptResult struct {
+	conn net.Conn
+	err  error
 }
 
 type connManagerConfig struct {
-	newConns <-chan net.Conn
-	logFile  *managedFile
-	writeTo  io.Writer
+	accepts <-chan acceptResult
+	logFile *managedFile
+	writeTo io.Writer
 }
 
 func newConnManager(ctx context.Context, config connManagerConfig) *connManager {
@@ -413,34 +419,39 @@ func (o *connManager) manageConnsLoop(ctx context.Context) {
 			return
 		case <-o.done:
 			return
-		case newConn := <-o.config.newConns:
-			setDeadLineErr := newConn.SetReadDeadline(time.Now().Add(time.Second))
+		case accept := <-o.config.accepts:
+			if accept.err != nil {
+				log.Printf("ipc socket listener exited with error - %s", accept.err)
+				return
+			}
+
+			setDeadLineErr := accept.conn.SetReadDeadline(time.Now().Add(time.Second))
 			if setDeadLineErr == nil {
 				options := make([]byte, 1)
 
-				_, _ = newConn.Read(options)
+				_, _ = accept.conn.Read(options)
 
 				if o.config.logFile != nil && options[0]&bufferedOutputClientFlag != 0 {
-					_, err := newConn.Write(o.config.logFile.buffered())
+					_, err := accept.conn.Write(o.config.logFile.buffered())
 					if err != nil {
-						_ = newConn.Close()
+						_ = accept.conn.Close()
 						continue
 					}
 				}
 
-				_ = newConn.SetReadDeadline(time.Time{})
+				_ = accept.conn.SetReadDeadline(time.Time{})
 			}
 
 			go func() {
-				_, _ = io.Copy(o.config.writeTo, newConn)
+				_, _ = io.Copy(o.config.writeTo, accept.conn)
 				select {
-				case closeConns <- newConn:
+				case closeConns <- accept.conn:
 				case <-ctx.Done():
-					_ = newConn.Close()
+					_ = accept.conn.Close()
 				}
 			}()
 
-			currentConns[newConn] = struct{}{}
+			currentConns[accept.conn] = struct{}{}
 		case closeThis := <-closeConns:
 			_ = closeThis.Close()
 			delete(currentConns, closeThis)
