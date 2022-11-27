@@ -162,7 +162,7 @@ func daemon(fs *flag.FlagSet) error {
 		"",
 		"The socket path (specify '-' to disable)")
 	socketMode := fileMode{
-		mode: 0750,
+		mode: 0600,
 	}
 	fs.Var(
 		&socketMode,
