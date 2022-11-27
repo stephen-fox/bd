@@ -51,12 +51,12 @@ const (
 	bufferedOutputClientFlag
 )
 
-var closeLogFn func() error
+var closeLogFn func()
 
 func main() {
 	err := runApp()
 	if closeLogFn != nil {
-		_ = closeLogFn()
+		closeLogFn()
 	}
 	if err != nil {
 		log.Fatalln(err)
@@ -183,7 +183,7 @@ func daemon(fs *flag.FlagSet) error {
 	logFilePath := fs.String(
 		"o",
 		"",
-		"The log file path")
+		"Optionally specify a file path to save child's stderr and stdout to")
 
 	_ = fs.Parse(os.Args[2:])
 
@@ -224,6 +224,7 @@ func daemon(fs *flag.FlagSet) error {
 		restarted.Env = os.Environ()
 		restarted.Env = append(restarted.Env, childEnvName+"=true")
 		restarted.SysProcAttr = childSysProcAttr
+
 		err := restarted.Start()
 		if err != nil {
 			return fmt.Errorf("failed to exec to background - %w", err)
@@ -249,21 +250,28 @@ func daemon(fs *flag.FlagSet) error {
 	ctx, cancelFn := signal.NotifyContext(context.Background(), osspecific.QuitSignals()...)
 	defer cancelFn()
 
-	logFile, err := startManagedFile(ctx, *logFilePath)
-	if err != nil {
-		return fmt.Errorf("failed to start log file writer - %w", err)
+	var logFile *managedFile
+	if *logFilePath != "" {
+		var err error
+		logFile, err = startManagedFile(*logFilePath)
+		if err != nil {
+			return fmt.Errorf("failed to start log file writer - %w", err)
+		}
+
+		closeLogFn = logFile.close
+
+		log.SetOutput(logFile)
 	}
 
-	closeLogFn = logFile.file.Close
-
 	log.SetPrefix(fmt.Sprintf("[%s] ", appName))
-	log.SetOutput(logFile)
 
 	child := exec.CommandContext(ctx, fs.Arg(0), fs.Args()[1:]...)
 
 	if *socketPath == "-" {
-		child.Stderr = logFile
-		child.Stdout = logFile
+		if logFile != nil {
+			child.Stderr = logFile
+			child.Stdout = logFile
+		}
 	} else {
 		listener, onNewConns, err := newCtlSocket(ctx, *socketPath, socketMode.mode)
 		if err != nil {
@@ -280,7 +288,7 @@ func daemon(fs *flag.FlagSet) error {
 
 		cm := newConnManager(ctx, connManagerConfig{
 			newConns: onNewConns,
-			file:     logFile,
+			logFile:  logFile,
 			writeTo:  stdinPipe,
 		})
 		defer cm.close()
@@ -296,7 +304,7 @@ func daemon(fs *flag.FlagSet) error {
 
 	log.Printf("executing: '%s'...", child.String())
 
-	err = child.Start()
+	err := child.Start()
 	if err != nil {
 		return fmt.Errorf("failed to start child process - %w", err)
 	}
@@ -345,7 +353,7 @@ func newCtlSocket(ctx context.Context, filePath string, mode os.FileMode) (net.L
 
 type connManagerConfig struct {
 	newConns <-chan net.Conn
-	file     *managedFile
+	logFile  *managedFile
 	writeTo  io.Writer
 }
 
@@ -386,11 +394,14 @@ func (o *connManager) manageConnsLoop(ctx context.Context) {
 	defer func() {
 		for conn := range currentConns {
 			_ = conn.SetWriteDeadline(time.Now().Add(time.Second))
+
 			_, _ = conn.Write([]byte("daemon is shutting down - " +
 				ctx.Err().Error() + "\n"))
+
 			_ = conn.Close()
 			delete(currentConns, conn)
 		}
+
 		close(o.wait)
 	}()
 
@@ -406,14 +417,17 @@ func (o *connManager) manageConnsLoop(ctx context.Context) {
 			setDeadLineErr := newConn.SetReadDeadline(time.Now().Add(time.Second))
 			if setDeadLineErr == nil {
 				options := make([]byte, 1)
+
 				_, _ = newConn.Read(options)
-				if options[0]&bufferedOutputClientFlag != 0 {
-					_, err := newConn.Write(o.config.file.buffered())
+
+				if o.config.logFile != nil && options[0]&bufferedOutputClientFlag != 0 {
+					_, err := newConn.Write(o.config.logFile.buffered())
 					if err != nil {
 						_ = newConn.Close()
 						continue
 					}
 				}
+
 				_ = newConn.SetReadDeadline(time.Time{})
 			}
 
@@ -421,7 +435,8 @@ func (o *connManager) manageConnsLoop(ctx context.Context) {
 				_, _ = io.Copy(o.config.writeTo, newConn)
 				select {
 				case closeConns <- newConn:
-				case <-time.After(time.Second):
+				case <-ctx.Done():
+					_ = newConn.Close()
 				}
 			}()
 
@@ -430,7 +445,14 @@ func (o *connManager) manageConnsLoop(ctx context.Context) {
 			_ = closeThis.Close()
 			delete(currentConns, closeThis)
 		case write := <-o.writeReqs:
-			n, err := o.config.file.Write(write.b)
+			var n int
+			var err error
+			if o.config.logFile != nil {
+				n, err = o.config.logFile.Write(write.b)
+			} else {
+				n = len(write.b)
+			}
+
 			write.cb <- rwEventResult{
 				n:   n,
 				err: err,
@@ -482,7 +504,7 @@ func (o *writerProxy) Write(b []byte) (int, error) {
 	}
 }
 
-func startManagedFile(ctx context.Context, filePath string) (*managedFile, error) {
+func startManagedFile(filePath string) (*managedFile, error) {
 	file, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0600)
 	if err != nil {
 		return nil, err
@@ -493,9 +515,11 @@ func startManagedFile(ctx context.Context, filePath string) (*managedFile, error
 		maxBufBytes:  4096,
 		buf:          bytes.NewBuffer(nil),
 		file:         file,
+		done:         make(chan struct{}),
+		wait:         make(chan struct{}),
 	}
 
-	go w.truncateFileLoop(ctx)
+	go w.truncateFileLoop()
 
 	return w, nil
 }
@@ -503,19 +527,30 @@ func startManagedFile(ctx context.Context, filePath string) (*managedFile, error
 type managedFile struct {
 	maxFileBytes int64
 	maxBufBytes  int
-	mu           sync.RWMutex
+	mu           sync.Mutex
 	buf          *bytes.Buffer
 	file         *os.File
+	once         sync.Once
+	done         chan struct{}
+	wait         chan struct{}
 }
 
-func (o *managedFile) truncateFileLoop(ctx context.Context) {
+func (o *managedFile) close() {
+	o.once.Do(func() {
+		close(o.done)
+		<-o.wait
+	})
+}
+
+func (o *managedFile) truncateFileLoop() {
 	ticker := time.NewTicker(time.Hour)
 
 	for {
 		select {
-		case <-ctx.Done():
+		case <-o.done:
 			ticker.Stop()
 			_ = o.file.Close()
+			close(o.wait)
 			return
 		case <-ticker.C:
 			info, err := o.file.Stat()
@@ -539,7 +574,7 @@ func (o *managedFile) truncate() error {
 		return err
 	}
 
-	_, err = o.file.Seek(0, 0)
+	_, err = o.file.Seek(0, io.SeekStart)
 	if err != nil {
 		return err
 	}
