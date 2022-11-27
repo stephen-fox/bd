@@ -294,8 +294,8 @@ func daemon(fs *flag.FlagSet) error {
 		defer cm.close()
 
 		writer := &writerProxy{
-			ctx:     ctx,
-			onWrite: cm.writeEvents(),
+			ctx:    ctx,
+			writes: cm.writer(),
 		}
 
 		child.Stderr = writer
@@ -365,10 +365,10 @@ type connManagerConfig struct {
 
 func newConnManager(ctx context.Context, config connManagerConfig) *connManager {
 	cm := &connManager{
-		config:    config,
-		writeReqs: make(chan rwEvent),
-		done:      make(chan struct{}),
-		wait:      make(chan struct{}),
+		config: config,
+		writes: make(chan rwEvent),
+		done:   make(chan struct{}),
+		wait:   make(chan struct{}),
 	}
 
 	go cm.manageConnsLoop(ctx)
@@ -377,11 +377,11 @@ func newConnManager(ctx context.Context, config connManagerConfig) *connManager 
 }
 
 type connManager struct {
-	config    connManagerConfig
-	writeReqs chan rwEvent
-	once      sync.Once
-	done      chan struct{}
-	wait      chan struct{}
+	config connManagerConfig
+	writes chan rwEvent
+	once   sync.Once
+	done   chan struct{}
+	wait   chan struct{}
 }
 
 func (o *connManager) close() {
@@ -391,8 +391,8 @@ func (o *connManager) close() {
 	})
 }
 
-func (o *connManager) writeEvents() chan<- rwEvent {
-	return o.writeReqs
+func (o *connManager) writer() chan<- rwEvent {
+	return o.writes
 }
 
 func (o *connManager) manageConnsLoop(ctx context.Context) {
@@ -455,7 +455,7 @@ func (o *connManager) manageConnsLoop(ctx context.Context) {
 		case closeThis := <-closeConns:
 			_ = closeThis.Close()
 			delete(currentConns, closeThis)
-		case write := <-o.writeReqs:
+		case write := <-o.writes:
 			var n int
 			var err error
 			if o.config.logFile != nil {
@@ -481,8 +481,8 @@ func (o *connManager) manageConnsLoop(ctx context.Context) {
 }
 
 type writerProxy struct {
-	ctx     context.Context
-	onWrite chan<- rwEvent
+	ctx    context.Context
+	writes chan<- rwEvent
 }
 
 type rwEvent struct {
@@ -499,7 +499,7 @@ func (o *writerProxy) Write(b []byte) (int, error) {
 	cb := make(chan rwEventResult, 1)
 
 	select {
-	case o.onWrite <- rwEvent{
+	case o.writes <- rwEvent{
 		b:  b,
 		cb: cb,
 	}:
