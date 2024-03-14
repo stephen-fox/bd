@@ -96,6 +96,7 @@ func client(fs *flag.FlagSet) error {
 		false,
 		"Do not exit if stdin is closed (useful for writing to stdin in a shell,\n"+
 			"closing it, and waiting until the daemon shuts down)")
+
 	noBufferedOutput := fs.Bool(
 		"q",
 		false,
@@ -157,10 +158,12 @@ func daemon(fs *flag.FlagSet) error {
 		"f",
 		false,
 		"Stay in the foreground rather than exec'ing into background")
+
 	socketPath := fs.String(
 		"l",
 		"",
 		"The socket path (specify '-' to disable)")
+
 	socketMode := fileMode{
 		mode: 0600,
 	}
@@ -168,18 +171,22 @@ func daemon(fs *flag.FlagSet) error {
 		&socketMode,
 		"m",
 		"The socket's file mode")
+
 	workingDirPath := fs.String(
 		"d",
 		"",
 		"The working directory to use")
+
 	runAsUser := fs.String(
 		"u",
 		"",
 		"Optionally run as a specific user (only supported on Unix systems)")
+
 	pidFilePath := fs.String(
 		"p",
 		"",
 		"Optionally create a PID file at this file path")
+
 	logFilePath := fs.String(
 		"o",
 		"",
