@@ -155,7 +155,7 @@ func client(fs *flag.FlagSet) error {
 
 func daemon(fs *flag.FlagSet) error {
 	foreground := fs.Bool(
-		"f",
+		"F",
 		false,
 		"Stay in the foreground rather than exec'ing into background")
 
