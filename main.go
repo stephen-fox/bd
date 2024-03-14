@@ -164,7 +164,7 @@ func daemon(flagSet *flag.FlagSet) error {
 		"",
 		"The socket path (specify '-' to disable)")
 
-	socketMode := fileMode{
+	socketMode := fileModeFlag{
 		mode: 0600,
 	}
 	flagSet.Var(
@@ -624,15 +624,15 @@ func (o *managedFile) Write(b []byte) (int, error) {
 	return n, err
 }
 
-type fileMode struct {
+type fileModeFlag struct {
 	mode os.FileMode
 }
 
-func (o *fileMode) String() string {
+func (o *fileModeFlag) String() string {
 	return fmt.Sprintf("%o (%s)", o.mode, o.mode.String())
 }
 
-func (o *fileMode) Set(s string) error {
+func (o *fileModeFlag) Set(s string) error {
 	i, err := strconv.ParseInt(s, 8, 32)
 	if err != nil {
 		return err
