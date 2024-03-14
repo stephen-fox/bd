@@ -78,38 +78,38 @@ func runApp() error {
 		return errors.New("please specify a mode ('client' or 'daemon') or '-h' for more information")
 	}
 
-	fs := flag.NewFlagSet(flag.Arg(0), flag.ExitOnError)
+	flagSet := flag.NewFlagSet(flag.Arg(0), flag.ExitOnError)
 
 	switch flag.Arg(0) {
 	case "client":
-		return client(fs)
+		return client(flagSet)
 	case "daemon":
-		return daemon(fs)
+		return daemon(flagSet)
 	default:
 		return fmt.Errorf("unknown mode: '%s'", flag.Arg(0))
 	}
 }
 
-func client(fs *flag.FlagSet) error {
-	waitForSocketToClose := fs.Bool(
+func client(flagSet *flag.FlagSet) error {
+	waitForSocketToClose := flagSet.Bool(
 		"w",
 		false,
 		"Do not exit if stdin is closed (useful for writing to stdin in a shell,\n"+
 			"closing it, and waiting until the daemon shuts down)")
 
-	noBufferedOutput := fs.Bool(
+	noBufferedOutput := flagSet.Bool(
 		"q",
 		false,
 		"Do not retrieve buffered output from daemon's child process")
 
-	_ = fs.Parse(os.Args[2:])
+	_ = flagSet.Parse(os.Args[2:])
 
-	if fs.NArg() == 0 {
+	if flagSet.NArg() == 0 {
 		return errors.New("please specify the path to the daemon socket")
 	}
 
 	conn, err := goss.Dial(goss.DialConfig{
-		Path:    fs.Arg(0),
+		Path:    flagSet.Arg(0),
 		Timeout: time.Second,
 	})
 	if err != nil {
@@ -153,13 +153,13 @@ func client(fs *flag.FlagSet) error {
 	}
 }
 
-func daemon(fs *flag.FlagSet) error {
-	foreground := fs.Bool(
+func daemon(flagSet *flag.FlagSet) error {
+	foreground := flagSet.Bool(
 		"F",
 		false,
 		"Stay in the foreground rather than exec'ing into background")
 
-	socketPath := fs.String(
+	socketPath := flagSet.String(
 		"l",
 		"",
 		"The socket path (specify '-' to disable)")
@@ -167,38 +167,38 @@ func daemon(fs *flag.FlagSet) error {
 	socketMode := fileMode{
 		mode: 0600,
 	}
-	fs.Var(
+	flagSet.Var(
 		&socketMode,
 		"m",
 		"The socket's file mode")
 
-	workingDirPath := fs.String(
+	workingDirPath := flagSet.String(
 		"d",
 		"",
 		"The working directory to use")
 
-	runAsUser := fs.String(
+	runAsUser := flagSet.String(
 		"u",
 		"",
 		"Optionally run as a specific user (only supported on Unix systems)")
 
-	pidFilePath := fs.String(
+	pidFilePath := flagSet.String(
 		"p",
 		"",
 		"Optionally create a PID file at this file path")
 
-	logFilePath := fs.String(
+	logFilePath := flagSet.String(
 		"o",
 		"",
 		"Optionally specify a file path to save child's stderr and stdout to")
 
-	_ = fs.Parse(os.Args[2:])
+	_ = flagSet.Parse(os.Args[2:])
 
-	if fs.NArg() == 0 {
+	if flagSet.NArg() == 0 {
 		return errors.New("please specify an application to execute and its arguments")
 	}
 
-	fs.VisitAll(func(f *flag.Flag) {
+	flagSet.VisitAll(func(f *flag.Flag) {
 		if strings.Contains(strings.ToLower(f.Usage), "optional") {
 			return
 		}
@@ -272,7 +272,7 @@ func daemon(fs *flag.FlagSet) error {
 
 	log.SetPrefix(fmt.Sprintf("[%s] ", appName))
 
-	child := exec.CommandContext(ctx, fs.Arg(0), fs.Args()[1:]...)
+	child := exec.CommandContext(ctx, flagSet.Arg(0), flagSet.Args()[1:]...)
 
 	if *socketPath == "-" {
 		if logFile != nil {
