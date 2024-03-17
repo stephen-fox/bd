@@ -292,16 +292,10 @@ func daemon(flagSet *flag.FlagSet) error {
 	}
 	defer consoleListener.Close()
 
-	pipeReader, pipeWriter := io.Pipe()
+	consoleFds := startFdServer(ctx, consoleAccepts)
 
-	consoleManager := newConnManager(ctx, connManagerConfig{
-		accepts:  consoleAccepts,
-		logFile:  consoleOutputLog,
-		connDest: pipeWriter,
-	})
-	defer consoleManager.close()
-
-	bm := newBhyveManager(vmName, flagSet.Args(), pipeReader, consoleManager, powerStateRequests)
+	// TODO: Fix serial console log file.
+	bm := newBhyveManager(vmName, flagSet.Args(), powerStateRequests, consoleFds)
 
 	return bm.loop(ctx)
 }
@@ -318,12 +312,11 @@ func dataDirPath(vmName string) string {
 	return filepath.Join("/var", vmName)
 }
 
-func newBhyveManager(vmName string, bhyveArgs []string, stdin io.Reader, stdout io.Writer, powerRequests <-chan powerStateRequest) *bhyveManager {
+func newBhyveManager(vmName string, bhyveArgs []string, powerRequests <-chan powerStateRequest, consoleFds *fdServer) *bhyveManager {
 	return &bhyveManager{
 		vmName:    vmName,
 		bhyveArgs: bhyveArgs,
-		stdin:     stdin,
-		stdout:    stdout,
+		consoleFD: consoleFds,
 		powerReqs: powerRequests,
 		exited:    make(chan error, 1),
 		stderr:    bytes.NewBuffer(nil),
@@ -333,8 +326,7 @@ func newBhyveManager(vmName string, bhyveArgs []string, stdin io.Reader, stdout 
 type bhyveManager struct {
 	vmName    string
 	bhyveArgs []string
-	stdin     io.Reader
-	stdout    io.Writer
+	consoleFD *fdServer
 	powerReqs <-chan powerStateRequest
 	exited    chan error
 	execCmd   *exec.Cmd
@@ -460,7 +452,6 @@ func (o *bhyveManager) start(ctx context.Context) error {
 
 	bhyve := exec.Command("/usr/sbin/bhyve", o.bhyveArgs...)
 
-	bhyve.Stdin = o.stdin
 	bhyve.SysProcAttr = &syscall.SysProcAttr{
 		// We set Setpgid to true because, by default,
 		// a signal sent to us will be automatically
@@ -478,12 +469,40 @@ func (o *bhyveManager) start(ctx context.Context) error {
 
 	bhyve.Stderr = o.stderr
 
-	bhyve.Stdout = o.stdout
-
-	log.Printf("starting bhyve (argv: '%s')...", bhyve.String())
-
-	err := bhyve.Start()
+	stdin, err := bhyve.StdinPipe()
 	if err != nil {
+		return fmt.Errorf("failed to create stdin pipe - %w", err)
+	}
+
+	stdinFile, ok := stdin.(*os.File)
+	if !ok {
+		return fmt.Errorf("expected stdin pipe to be *os.File - got %T", stdin)
+	}
+
+	stdout, err := bhyve.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("failed to create stdout pipe - %w", err)
+	}
+
+	stdoutFile, ok := stdout.(*os.File)
+	if !ok {
+		return fmt.Errorf("expected stdout pipe to be *os.File - got %T", stdin)
+	}
+
+	err = o.consoleFD.SetFds(ctx, []*os.File{stdinFile, stdoutFile})
+	if err != nil {
+		return fmt.Errorf("failed to set console fds - %w", err)
+	}
+
+	log.Printf("exec'ing bhyve with argv: %q...", bhyve.String())
+
+	err = bhyve.Start()
+	if err != nil {
+		o.consoleFD.SetFds(ctx, nil)
+
+		_ = stdin.Close()
+		_ = stdout.Close()
+
 		return fmt.Errorf("failed to start bhyve - %w", err)
 	}
 
@@ -595,6 +614,11 @@ func (o *bhyveManager) isRunning() bool {
 }
 
 func (o *bhyveManager) onExecCmdExit(ctx context.Context, exitedErr error) error {
+	setFdsErr := o.consoleFD.SetFds(ctx, nil)
+	if setFdsErr != nil {
+		log.Printf("[warn] failed to set console fds to nil on byve exit - %s", setFdsErr)
+	}
+
 	// Note: Refer to "man bhyve" for exit status info.
 	if exitedErr == nil {
 		// err == nil means exit status 0.
@@ -1188,17 +1212,6 @@ func power(flagSet *flag.FlagSet) error {
 }
 
 func console(flagSet *flag.FlagSet) error {
-	waitForSocketToClose := flagSet.Bool(
-		"w",
-		false,
-		"Do not exit if stdin is closed (useful for writing to stdin in a shell,\n"+
-			"closing it, and waiting until the daemon shuts down)")
-
-	noBufferedOutput := flagSet.Bool(
-		"q",
-		false,
-		"Do not retrieve buffered output from daemon's child process")
-
 	_ = flagSet.Parse(os.Args[2:])
 
 	if flagSet.NArg() == 0 {
@@ -1211,32 +1224,46 @@ func console(flagSet *flag.FlagSet) error {
 	}
 	defer conn.Close()
 
-	ctx, cancelFn := signal.NotifyContext(context.Background(),
-		syscall.SIGINT, syscall.SIGTERM)
-	defer cancelFn()
-
-	var clientFlags byte
-	if !*noBufferedOutput {
-		clientFlags |= bufferedOutputClientFlag
+	unixConn, ok := conn.(*net.UnixConn)
+	if !ok {
+		return fmt.Errorf("expected *net.UnixConn - got %T", conn)
 	}
 
-	_, err = conn.Write([]byte{clientFlags})
-	if err != nil {
-		return fmt.Errorf("failed to write client flags to socket - %s", err)
-	}
+	rw := newUpdatingReadWriter(unixConn)
 
-	done := make(chan error, 1)
+	// ignoredSignals := make(chan os.Signal)
+	// signal.Notify(ignoredSignals, syscall.SIGINT)
+	// defer signal.Stop(ignoredSignals)
+
+	// go func() {
+	// 	for range ignoredSignals {
+	// 	}
+	// }()
+
+	// stdinState, err := term.GetState(int(os.Stdin.Fd()))
+	// if err != nil {
+	// 	return err
+	// }
+
+	// stdoutState, err := term.GetState(int(os.Stdout.Fd()))
+	// if err != nil {
+	// 	return err
+	// }
+
+	errs := make(chan error, 2)
+
 	go func() {
-		_, err := io.Copy(conn, os.Stdin)
-		if !*waitForSocketToClose {
-			done <- err
-		}
+		_, err := io.Copy(os.Stdout, rw)
+		errs <- err
 	}()
 
 	go func() {
-		_, err := io.Copy(os.Stdout, conn)
-		done <- err
+		_, err := io.Copy(rw, os.Stdin)
+		errs <- err
 	}()
+
+	return <-errs
+}
 
 func newUpdatingReadWriter(unixConn *net.UnixConn) *updatingReadWriter {
 	rw := &updatingReadWriter{
