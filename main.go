@@ -25,8 +25,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ftrvxmtrx/fd"
 	"gitlab.com/stephen-fox/bhyved/internal/fdserver"
+	"gitlab.com/stephen-fox/bhyved/internal/hsio"
 	"gitlab.com/stephen-fox/bhyved/internal/lctx"
 )
 
@@ -1056,7 +1056,15 @@ func console(flagSet *flag.FlagSet) error {
 		return fmt.Errorf("expected *net.UnixConn - got %T", conn)
 	}
 
-	rw := newUpdatingReadWriter(unixConn)
+	consoleStdin := hsio.NewWriteCloser()
+	consoleStdout := hsio.NewReadCloser()
+
+	consoleFdFns := hsio.NewFdUpdaterFnBuilder().
+		AddWriter(consoleStdin).
+		AddReader(consoleStdout).
+		Build()
+
+	hsio.NewUnixConnFdUpdater(context.Background(), unixConn, consoleFdFns)
 
 	// ignoredSignals := make(chan os.Signal)
 	// signal.Notify(ignoredSignals, syscall.SIGINT)
@@ -1080,335 +1088,16 @@ func console(flagSet *flag.FlagSet) error {
 	errs := make(chan error, 2)
 
 	go func() {
-		_, err := io.Copy(os.Stdout, rw)
+		_, err := io.Copy(os.Stdout, consoleStdout)
 		errs <- err
 	}()
 
 	go func() {
-		_, err := io.Copy(rw, os.Stdin)
+		_, err := io.Copy(consoleStdin, os.Stdin)
 		errs <- err
 	}()
 
 	return <-errs
-}
-
-func newUpdatingReadWriter(unixConn *net.UnixConn) *updatingReadWriter {
-	rw := &updatingReadWriter{
-		unixConn: unixConn,
-		reader:   newHotwappableReader(),
-		writer:   newHotSwappableWriter(),
-		getErr:   make(chan error),
-		close:    make(chan struct{}),
-		done:     make(chan struct{}),
-	}
-
-	go rw.loop()
-
-	return rw
-}
-
-type updatingReadWriter struct {
-	unixConn *net.UnixConn
-	reader   *hotSwappableReader
-	writer   *hotSwappableWriter
-	getErr   chan error
-	close    chan struct{}
-	done     chan struct{}
-	err      error
-}
-
-func (o *updatingReadWriter) Read(b []byte) (int, error) {
-	return o.reader.Read(b)
-}
-
-func (o *updatingReadWriter) Write(b []byte) (int, error) {
-	return o.writer.Write(b)
-}
-
-func (o *updatingReadWriter) Close() error {
-	select {
-	case <-o.done:
-		return o.err
-	case o.close <- struct{}{}:
-		return nil
-	}
-}
-
-func (o *updatingReadWriter) loop() {
-	defer func() {
-		if o.err == nil {
-			o.err = errors.New("exited due to unknown error")
-		}
-
-		o.unixConn.Close()
-		o.reader.Close()
-		o.writer.Close()
-
-		close(o.done)
-	}()
-
-	go o.getFdsLoop()
-
-	for {
-		select {
-		case <-o.close:
-			o.err = errors.New("closed")
-			return
-		case err := <-o.getErr:
-			o.err = fmt.Errorf("failed to get fds - %w", err)
-			return
-		}
-	}
-}
-
-func (o *updatingReadWriter) getFdsLoop() {
-	err := o.getFdsLoopWithError()
-	if err == nil {
-		err = errors.New("get fds loop exited unexpectedly without error")
-	}
-
-	select {
-	case <-o.done:
-	case o.getErr <- err:
-	}
-}
-
-func (o *updatingReadWriter) getFdsLoopWithError() error {
-	for {
-		fds, err := fd.Get(o.unixConn, 2, nil)
-		if err != nil {
-			return err
-		}
-
-		log.Printf("TODO: got fds %v - setting them...", fds)
-
-		err = o.writer.Set(fds[0]) // stdin
-		if err != nil {
-			return fmt.Errorf("failed to set writer - %w", err)
-		}
-
-		err = o.reader.Set(fds[1]) // stdout
-		if err != nil {
-			return fmt.Errorf("failed to set reader - %w", err)
-		}
-	}
-}
-
-func newHotwappableReader() *hotSwappableReader {
-	r, w := io.Pipe()
-
-	reader := &hotSwappableReader{
-		r:    r,
-		w:    w,
-		set:  make(chan io.ReadCloser),
-		wake: make(chan io.Reader),
-		read: make(chan readCallback),
-		clos: make(chan struct{}),
-		done: make(chan struct{}),
-	}
-
-	go reader.loop()
-
-	return reader
-}
-
-type hotSwappableReader struct {
-	r    *io.PipeReader
-	w    *io.PipeWriter
-	set  chan io.ReadCloser
-	wake chan io.Reader
-	read chan readCallback
-	clos chan struct{}
-	done chan struct{}
-	err  error
-}
-
-func (o *hotSwappableReader) Close() error {
-	select {
-	case <-o.done:
-		return o.err
-	case o.clos <- struct{}{}:
-		return nil
-	}
-}
-
-func (o *hotSwappableReader) Set(r io.ReadCloser) error {
-	select {
-	case <-o.done:
-		return o.err
-	case o.set <- r:
-		return nil
-	}
-}
-
-func (o *hotSwappableReader) Read(b []byte) (int, error) {
-	return o.r.Read(b)
-}
-
-func (o *hotSwappableReader) readOld(b []byte) (int, error) {
-retry:
-	cb := readCallback{
-		b:     b,
-		ready: make(chan struct{}),
-	}
-
-	select {
-	case <-o.done:
-		return 0, o.err
-	case o.read <- cb:
-		log.Printf("TODO: read []byte sent")
-		// Keep going.
-	}
-
-	select {
-	case <-o.done:
-		return 0, o.err
-	case <-cb.ready:
-		if cb.err != nil {
-			log.Printf("TODO: retry read - %v", cb.err)
-			goto retry
-		}
-
-		log.Printf("TODO: read %d", cb.n)
-
-		return cb.n, nil
-	}
-}
-
-type readCallback struct {
-	b     []byte
-	ready chan struct{}
-	n     int
-	err   error
-}
-
-func (o *hotSwappableReader) loop() {
-	var current io.ReadCloser
-
-	defer func() {
-		if o.err == nil {
-			o.err = errors.New("exited due to unknown error")
-		}
-
-		if current != nil {
-			current.Close()
-		}
-
-		o.r.Close()
-		o.w.Close()
-
-		close(o.done)
-	}()
-
-	// go o.readFrom()
-
-	for {
-		select {
-		case <-o.clos:
-			o.err = errors.New("reader closed")
-			return
-		case r := <-o.set:
-			if current != nil {
-				current.Close()
-			}
-
-			current = r
-
-			go io.Copy(o.w, r)
-
-			// go func() {
-			// 	select {
-			// 	case <-o.done:
-			// 	case o.wake <- r:
-			// 	}
-			// }()
-		}
-	}
-}
-
-func (o *hotSwappableReader) readFrom() {
-	var cachedRead *readCallback
-	var r io.Reader
-
-	for {
-		select {
-		case <-o.done:
-			return
-		case cb := <-o.read:
-			cachedRead = &cb
-		case r = <-o.wake:
-			// New reader available.
-		}
-
-		if r != nil && cachedRead != nil {
-			log.Printf("TODO: do cached read")
-
-			cachedRead.n, cachedRead.err = r.Read(cachedRead.b)
-
-			close(cachedRead.ready)
-
-			cachedRead = nil
-		}
-	}
-}
-
-func newHotSwappableWriter() *hotSwappableWriter {
-	return &hotSwappableWriter{}
-}
-
-type hotSwappableWriter struct {
-	rwMu sync.RWMutex
-	w    io.WriteCloser
-	err  error
-}
-
-func (o *hotSwappableWriter) Close() error {
-	o.rwMu.Lock()
-	defer o.rwMu.Unlock()
-
-	if o.err != nil {
-		return o.err
-	}
-
-	o.err = errors.New("writer closed")
-
-	if o.w != nil {
-		o.w.Close()
-		o.w = nil
-	}
-
-	return nil
-}
-
-func (o *hotSwappableWriter) Set(w io.WriteCloser) error {
-	o.rwMu.Lock()
-	defer o.rwMu.Unlock()
-
-	if o.err != nil {
-		return o.err
-	}
-
-	o.w = w
-
-	return nil
-}
-
-func (o *hotSwappableWriter) Write(b []byte) (int, error) {
-	o.rwMu.RLock()
-	defer o.rwMu.RUnlock()
-
-	if o.err != nil {
-		return 0, o.err
-	}
-
-	// TODO: Maybe we should cache the data instead?
-	if o.w == nil {
-		return len(b), nil
-	}
-
-	_, _ = o.w.Write(b)
-
-	return len(b), nil
 }
 
 type fileModeFlag struct {
