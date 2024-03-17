@@ -562,6 +562,10 @@ func (o *bhyveManager) bhyvectl(ctx context.Context, arg string, args ...string)
 		o.vmName,
 		arg)
 
+	if len(args) > 0 {
+		bhyvectl.Args = append(bhyvectl.Args, args...)
+	}
+
 	out, err := bhyvectl.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to execute %q - %w - output: %s",
