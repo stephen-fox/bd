@@ -211,6 +211,7 @@ func daemon(flagSet *flag.FlagSet) error {
 		var childSysProcAttr *syscall.SysProcAttr
 		if *runAsUser != "" {
 			// TODO: Re-implement this.
+			return errors.New("TODO: this needs to be re-implemented :(")
 		}
 
 		restarted := exec.Command(os.Args[0], os.Args[1:]...)
