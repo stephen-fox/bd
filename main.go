@@ -451,6 +451,20 @@ func (o *bhyveManager) start(ctx context.Context) error {
 	bhyve := exec.Command("/usr/sbin/bhyve", o.bhyveArgs...)
 
 	bhyve.Stdin = o.stdin
+	bhyve.SysProcAttr = &syscall.SysProcAttr{
+		// We set Setpgid to true because, by default,
+		// a signal sent to us will be automatically
+		// sent to any children (i.e., pressing ctrl+c
+		// to send SIGINT to bhyved will also send
+		// a SIGINT to the bhyve child process).
+		// This is bad because SIGINT makes bhyve
+		// exit immediately.
+		//
+		// Setting this to true assigns bhyve to a new
+		// process group ID, which will not receive
+		// signals sent to the parent process.
+		Setpgid: true,
+	}
 
 	bhyve.Stderr = o.stderr
 
@@ -466,8 +480,11 @@ func (o *bhyveManager) start(ctx context.Context) error {
 	o.execCmd = bhyve
 
 	go func() {
-		o.exited <- bhyve.Wait()
-		log.Printf("TODO: bhyve exited")
+		err := bhyve.Wait()
+
+		log.Printf("bhyve exited - exec.cmd error is %v", err)
+
+		o.exited <- err
 	}()
 
 	return nil
@@ -483,7 +500,7 @@ func (o *bhyveManager) acpiOffOrKill(ctx context.Context) error {
 	// Trigger ACPI poweroff, refer to "man bhyve" for more info.
 	err := o.execCmd.Process.Signal(syscall.SIGTERM)
 	if err != nil {
-		log.Printf("failed to send sigterm to bhyve - %w", err)
+		log.Printf("failed to send sigterm to bhyve - %s", err)
 	}
 
 	select {
@@ -494,12 +511,10 @@ func (o *bhyveManager) acpiOffOrKill(ctx context.Context) error {
 		_ = o.pullPowerCable(pullPowerCtx)
 
 		return ctx.Err()
-	case <-o.exited:
-		log.Println("bhyve process exited after sending sigterm")
+	case err = <-o.exited:
+		log.Printf("bhyve process exited after sending sigterm - destroying vm with bhyvectl... (child err: %v)", err)
 
-		log.Println("destroying vm with bhyvectl...")
-
-		err := o.bhyvectl(ctx, "--destroy")
+		err = o.bhyvectl(ctx, "--destroy")
 		if err != nil {
 			log.Printf("failed to destroy vm after stopping it - %s", err)
 		}
