@@ -387,6 +387,8 @@ func (o *bhyveManager) loop(ctx context.Context) error {
 }
 
 func (o *bhyveManager) onPowerStateRequest(ctx context.Context, newState powerState) (clientMsg string, err error) {
+	log.Printf("received power state request - new state: %q", newState.String())
+
 	switch newState {
 	case onPowerState:
 		err := o.start(ctx)
@@ -447,6 +449,8 @@ func (o *bhyveManager) start(ctx context.Context) error {
 		return nil
 	}
 
+	log.Println("starting bhyve...")
+
 	// TODO: Check if the VM exists first.
 	o.bhyvectl(ctx, "destroy")
 
@@ -501,6 +505,8 @@ func (o *bhyveManager) acpiOffOrKill(ctx context.Context) error {
 		return nil
 	}
 
+	log.Println("acpi powering off or killing bhyve...")
+
 	// Trigger ACPI poweroff, refer to "man bhyve" for more info.
 	err := o.execCmd.Process.Signal(syscall.SIGTERM)
 	if err != nil {
@@ -533,6 +539,8 @@ func (o *bhyveManager) pullPowerCable(ctx context.Context) error {
 
 		return nil
 	}
+
+	log.Println("pulling power cable from bhyve...")
 
 	defer func() {
 		log.Println("destroying vm with bhyvectl...")
