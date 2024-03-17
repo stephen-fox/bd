@@ -24,6 +24,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/ftrvxmtrx/fd"
 )
 
 const (
@@ -810,6 +812,131 @@ const (
 type powerStateRequest struct {
 	newState powerState
 	cb       chan error
+}
+
+func startFdServer(ctx context.Context, accepts <-chan acceptResult) *fdServer {
+	server := &fdServer{
+		accepts: accepts,
+		fds:     make(chan fdsReady),
+		done:    make(chan struct{}),
+	}
+
+	go server.loop(ctx)
+
+	return server
+}
+
+type fdServer struct {
+	accepts <-chan acceptResult
+	fds     chan fdsReady
+	done    chan struct{}
+	err     error
+}
+
+func (o *fdServer) Done() <-chan struct{} {
+	return o.done
+}
+
+func (o *fdServer) Err() error {
+	return o.err
+}
+
+func (o *fdServer) SetFds(ctx context.Context, fds []*os.File) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-o.done:
+		return o.err
+	case o.fds <- fdsReady{fds: fds}:
+		return nil
+	}
+}
+
+func (o *fdServer) loop(ctx context.Context) {
+	var currentFds []*os.File
+	currentConns := make(map[*net.UnixConn]struct{})
+
+	defer func() {
+		if o.err == nil {
+			o.err = errors.New("exited due to unknown error")
+		}
+
+		// TODO: Tell something about this.
+		log.Printf("fd server exiting - %s", o.err)
+
+		for conn := range currentConns {
+			conn.Close()
+		}
+
+		close(o.done)
+	}()
+
+	for {
+		select {
+		case <-ctx.Done():
+			o.err = ctx.Err()
+			return
+		case fds := <-o.fds:
+			currentFds = fds.fds
+
+			o.broadcastFds(currentFds, currentConns)
+		case accept := <-o.accepts:
+			if accept.err != nil {
+				o.err = accept.err
+				return
+			}
+
+			unixConn, ok := accept.conn.(*net.UnixConn)
+			if !ok {
+				o.err = fmt.Errorf("expected *net.UnixConn - got %T",
+					accept.conn)
+				return
+			}
+
+			err := o.sendFdsTo(currentFds, unixConn)
+			if err != nil {
+				log.Printf("[warn] failed to send current fds to new client - %s", err)
+
+				unixConn.Close()
+			} else {
+				currentConns[unixConn] = struct{}{}
+			}
+		}
+	}
+}
+
+func (o *fdServer) broadcastFds(fds []*os.File, currentConns map[*net.UnixConn]struct{}) {
+	if len(fds) == 0 {
+		return
+	}
+
+	for conn := range currentConns {
+		err := o.sendFdsTo(fds, conn)
+		if err != nil {
+			log.Printf("[warn] failed to send current fds to existing client - %s", err)
+
+			delete(currentConns, conn)
+		}
+	}
+}
+
+func (o *fdServer) sendFdsTo(fds []*os.File, conn *net.UnixConn) error {
+	if len(fds) == 0 {
+		return nil
+	}
+
+	err := fd.Put(conn, fds...)
+	if err != nil {
+		conn.Close()
+
+		return err
+	}
+
+	return nil
+}
+
+type fdsReady struct {
+	fds []*os.File
 }
 
 type connManagerConfig struct {
