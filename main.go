@@ -26,6 +26,8 @@ import (
 	"time"
 
 	"github.com/ftrvxmtrx/fd"
+	"gitlab.com/stephen-fox/bhyved/internal/fdserver"
+	"gitlab.com/stephen-fox/bhyved/internal/lctx"
 )
 
 const (
@@ -272,7 +274,7 @@ func daemon(flagSet *flag.FlagSet) error {
 		syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTERM)
 	defer cancelFn()
 
-	powerStateAccepts, powerStateListener, err := newUnixSocket(
+	powerStateListener, err := lctx.ListenUnixPath(
 		ctx,
 		powerStateSocketPath(vmName),
 		socketMode.mode)
@@ -281,9 +283,9 @@ func daemon(flagSet *flag.FlagSet) error {
 	}
 	defer powerStateListener.Close()
 
-	powerStateRequests := powerStateRequestsHanlder(ctx, powerStateAccepts)
+	powerStateRequests := powerStateRequestsHanlder(ctx, powerStateListener)
 
-	consoleAccepts, consoleListener, err := newUnixSocket(
+	consoleListener, err := lctx.ListenUnixPath(
 		ctx,
 		consoleSocketPath(vmName),
 		socketMode.mode)
@@ -292,7 +294,7 @@ func daemon(flagSet *flag.FlagSet) error {
 	}
 	defer consoleListener.Close()
 
-	consoleFds := startFdServer(ctx, consoleAccepts)
+	consoleFds := fdserver.ServeListener(ctx, consoleListener)
 
 	// TODO: Fix serial console log file.
 	bm := newBhyveManager(vmName, flagSet.Args(), powerStateRequests, consoleFds)
@@ -312,7 +314,7 @@ func dataDirPath(vmName string) string {
 	return filepath.Join("/var", vmName)
 }
 
-func newBhyveManager(vmName string, bhyveArgs []string, powerRequests <-chan powerStateRequest, consoleFds *fdServer) *bhyveManager {
+func newBhyveManager(vmName string, bhyveArgs []string, powerRequests <-chan powerStateRequest, consoleFds *fdserver.ListenerServer) *bhyveManager {
 	return &bhyveManager{
 		vmName:    vmName,
 		bhyveArgs: bhyveArgs,
@@ -326,7 +328,7 @@ func newBhyveManager(vmName string, bhyveArgs []string, powerRequests <-chan pow
 type bhyveManager struct {
 	vmName    string
 	bhyveArgs []string
-	consoleFD *fdServer
+	consoleFD *fdserver.ListenerServer
 	powerReqs <-chan powerStateRequest
 	exited    chan error
 	execCmd   *exec.Cmd
@@ -659,52 +661,7 @@ func (o *bhyveManager) onExecCmdExit(ctx context.Context, exitedErr error) error
 	return nil
 }
 
-func newUnixSocket(ctx context.Context, filePath string, perm os.FileMode) (<-chan acceptResult, io.Closer, error) {
-	_ = os.Remove(filePath)
-
-	listener, err := net.Listen("unix", filePath)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	err = os.Chmod(filePath, perm)
-	if err != nil {
-		_ = listener.Close()
-		_ = os.Remove(filePath)
-
-		return nil, nil, fmt.Errorf("failed to chmod unix socket - %w", err)
-	}
-
-	results := make(chan acceptResult)
-
-	go func() {
-		for {
-			var r acceptResult
-			r.conn, r.err = listener.Accept()
-
-			select {
-			case <-ctx.Done():
-				if r.conn != nil {
-					_ = r.conn.Close()
-				}
-				return
-			case results <- r:
-				if r.err != nil {
-					return
-				}
-			}
-		}
-	}()
-
-	return results, listener, nil
-}
-
-type acceptResult struct {
-	conn net.Conn
-	err  error
-}
-
-func powerStateRequestsHanlder(ctx context.Context, accepts <-chan acceptResult) <-chan powerStateRequest {
+func powerStateRequestsHanlder(ctx context.Context, listener *lctx.ListenerCtx) <-chan powerStateRequest {
 	requests := make(chan powerStateRequest)
 
 	go func() {
@@ -715,12 +672,13 @@ func powerStateRequestsHanlder(ctx context.Context, accepts <-chan acceptResult)
 				log.Printf("power state handler exiting - %s", ctx.Err())
 
 				return
-			case accept := <-accepts:
-				if accept.err != nil {
-					return
-				}
+			case <-listener.Done():
+				// TODO: Tell something about this.
+				log.Printf("listener is done - %s", listener.Err())
 
-				err := handlePowerStateRequest(ctx, requests, accept.conn)
+				return
+			case conn := <-listener.Conns():
+				err := handlePowerStateRequest(ctx, requests, conn)
 				if err != nil {
 					// TODO: Tell something about this.
 					log.Printf("power state handler exiting - %s", err)
@@ -838,133 +796,8 @@ type powerStateRequest struct {
 	cb       chan error
 }
 
-func startFdServer(ctx context.Context, accepts <-chan acceptResult) *fdServer {
-	server := &fdServer{
-		accepts: accepts,
-		fds:     make(chan fdsReady),
-		done:    make(chan struct{}),
-	}
-
-	go server.loop(ctx)
-
-	return server
-}
-
-type fdServer struct {
-	accepts <-chan acceptResult
-	fds     chan fdsReady
-	done    chan struct{}
-	err     error
-}
-
-func (o *fdServer) Done() <-chan struct{} {
-	return o.done
-}
-
-func (o *fdServer) Err() error {
-	return o.err
-}
-
-func (o *fdServer) SetFds(ctx context.Context, fds []*os.File) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-o.done:
-		return o.err
-	case o.fds <- fdsReady{fds: fds}:
-		return nil
-	}
-}
-
-func (o *fdServer) loop(ctx context.Context) {
-	var currentFds []*os.File
-	currentConns := make(map[*net.UnixConn]struct{})
-
-	defer func() {
-		if o.err == nil {
-			o.err = errors.New("exited due to unknown error")
-		}
-
-		// TODO: Tell something about this.
-		log.Printf("fd server exiting - %s", o.err)
-
-		for conn := range currentConns {
-			conn.Close()
-		}
-
-		close(o.done)
-	}()
-
-	for {
-		select {
-		case <-ctx.Done():
-			o.err = ctx.Err()
-			return
-		case fds := <-o.fds:
-			currentFds = fds.fds
-
-			o.broadcastFds(currentFds, currentConns)
-		case accept := <-o.accepts:
-			if accept.err != nil {
-				o.err = accept.err
-				return
-			}
-
-			unixConn, ok := accept.conn.(*net.UnixConn)
-			if !ok {
-				o.err = fmt.Errorf("expected *net.UnixConn - got %T",
-					accept.conn)
-				return
-			}
-
-			err := o.sendFdsTo(currentFds, unixConn)
-			if err != nil {
-				log.Printf("[warn] failed to send current fds to new client - %s", err)
-
-				unixConn.Close()
-			} else {
-				currentConns[unixConn] = struct{}{}
-			}
-		}
-	}
-}
-
-func (o *fdServer) broadcastFds(fds []*os.File, currentConns map[*net.UnixConn]struct{}) {
-	if len(fds) == 0 {
-		return
-	}
-
-	for conn := range currentConns {
-		err := o.sendFdsTo(fds, conn)
-		if err != nil {
-			log.Printf("[warn] failed to send current fds to existing client - %s", err)
-
-			delete(currentConns, conn)
-		}
-	}
-}
-
-func (o *fdServer) sendFdsTo(fds []*os.File, conn *net.UnixConn) error {
-	if len(fds) == 0 {
-		return nil
-	}
-
-	err := fd.Put(conn, fds...)
-	if err != nil {
-		conn.Close()
-
-		return err
-	}
-
-	return nil
-}
-
-type fdsReady struct {
-	fds []*os.File
-}
-
 type connManagerConfig struct {
-	accepts  <-chan acceptResult
+	listener *lctx.ListenerCtx
 	logFile  io.Writer
 	connDest io.Writer
 }
@@ -1057,43 +890,37 @@ func (o *connManager) manageConnsLoop(ctx context.Context) {
 		case <-o.done:
 			o.err = errors.New("daemon has been shutdown")
 			return
-		case accept := <-o.config.accepts:
-			if accept.err != nil {
-				o.err = fmt.Errorf("ipc socket listener exited with error - %w",
-					accept.err)
-
-				log.Println(o.err.Error())
-
-				return
-			}
-
-			setDeadLineErr := accept.conn.SetReadDeadline(time.Now().Add(time.Second))
+		case <-o.config.listener.Done():
+			o.err = fmt.Errorf("listener is done - %w", o.config.listener.Err())
+			return
+		case conn := <-o.config.listener.Conns():
+			setDeadLineErr := conn.SetReadDeadline(time.Now().Add(time.Second))
 			if setDeadLineErr == nil {
 				options := make([]byte, 1)
 
-				_, _ = accept.conn.Read(options)
+				_, _ = conn.Read(options)
 
 				if fromProcBuf.Len() > 0 && options[0]&bufferedOutputClientFlag != 0 {
-					_, err := fromProcBuf.WriteTo(accept.conn)
+					_, err := fromProcBuf.WriteTo(conn)
 					if err != nil {
-						_ = accept.conn.Close()
+						_ = conn.Close()
 						continue
 					}
 				}
 
-				_ = accept.conn.SetReadDeadline(time.Time{})
+				_ = conn.SetReadDeadline(time.Time{})
 			}
 
 			go func() {
-				_, _ = io.Copy(o.config.connDest, accept.conn)
+				_, _ = io.Copy(o.config.connDest, conn)
 				select {
-				case closeConns <- accept.conn:
+				case closeConns <- conn:
 				case <-ctx.Done():
-					_ = accept.conn.Close()
+					_ = conn.Close()
 				}
 			}()
 
-			currentConns[accept.conn] = struct{}{}
+			currentConns[conn] = struct{}{}
 		case closeThis := <-closeConns:
 			_ = closeThis.Close()
 			delete(currentConns, closeThis)
@@ -1576,12 +1403,10 @@ func (o *hotSwappableWriter) Write(b []byte) (int, error) {
 
 	// TODO: Maybe we should cache the data instead?
 	if o.w == nil {
-		log.Printf("TODO: skip write, writer is nil")
 		return len(b), nil
 	}
 
-	_, err := o.w.Write(b)
-	log.Printf("TODO: write result - %v", err)
+	_, _ = o.w.Write(b)
 
 	return len(b), nil
 }
