@@ -366,10 +366,14 @@ func (o *bhyveManager) loop(ctx context.Context) error {
 			return ctx.Err()
 		case powerRequest := <-o.powerReqs:
 			clientMsg, err := o.onPowerStateRequest(ctx, powerRequest.newState)
+
 			if clientMsg != "" {
 				powerRequest.cb <- errors.New(clientMsg)
-				close(powerRequest.cb)
+			} else {
+				powerRequest.cb <- nil
 			}
+			close(powerRequest.cb)
+
 			if err != nil {
 				return fmt.Errorf("failed to handle power state change - %w", err)
 			}
@@ -686,6 +690,8 @@ func powerStateRequestsHanlder(ctx context.Context, accepts <-chan acceptResult)
 				if err != nil {
 					// TODO: Tell something about this.
 					log.Printf("power state handler exiting - %s", err)
+
+					return
 				}
 			}
 		}
@@ -696,6 +702,11 @@ func powerStateRequestsHanlder(ctx context.Context, accepts <-chan acceptResult)
 
 func handlePowerStateRequest(ctx context.Context, requests chan powerStateRequest, conn net.Conn) error {
 	defer conn.Close()
+
+	sendMsgFn := func(msg string) error {
+		_, err := conn.Write([]byte(msg + "\n"))
+		return err
+	}
 
 	conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 
@@ -709,7 +720,7 @@ func handlePowerStateRequest(ctx context.Context, requests chan powerStateReques
 
 	state := powerStateFromString(text)
 	if state == unknownPowerState {
-		_, _ = conn.Write([]byte(fmt.Sprintf("error: unknown power state: %q", text)))
+		sendMsgFn(fmt.Sprintf("error: unknown power state: %q", text))
 
 		return nil
 	}
@@ -718,7 +729,7 @@ func handlePowerStateRequest(ctx context.Context, requests chan powerStateReques
 
 	select {
 	case <-ctx.Done():
-		_, _ = conn.Write([]byte(fmt.Sprintf("error: %s", ctx.Err().Error())))
+		sendMsgFn(fmt.Sprintf("error: %s", ctx.Err().Error()))
 
 		return ctx.Err()
 	case requests <- powerStateRequest{
@@ -729,12 +740,14 @@ func handlePowerStateRequest(ctx context.Context, requests chan powerStateReques
 
 	select {
 	case <-ctx.Done():
-		_, _ = conn.Write([]byte(fmt.Sprintf("error: %s", ctx.Err().Error())))
+		sendMsgFn(fmt.Sprintf("error: %s", ctx.Err().Error()))
 
 		return ctx.Err()
 	case err := <-cb:
 		if err != nil {
-			_, _ = conn.Write([]byte(fmt.Sprintf("error: %s", err.Error())))
+			sendMsgFn(fmt.Sprintf("error: %s", err.Error()))
+		} else {
+			sendMsgFn("")
 		}
 	}
 
@@ -1032,8 +1045,11 @@ func power(flagSet *flag.FlagSet) error {
 	}
 
 	errMsg := scanner.Text()
+	if errMsg != "" {
+		return errors.New(errMsg)
+	}
 
-	return errors.New(errMsg)
+	return nil
 }
 
 func console(flagSet *flag.FlagSet) error {
