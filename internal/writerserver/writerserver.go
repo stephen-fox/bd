@@ -60,6 +60,18 @@ type Server struct {
 	err       error
 }
 
+// Done returns a channel that is closed when the Server exits.
+func (o *Server) Done() <-chan struct{} {
+	return o.done
+}
+
+// Err returns a non-nil error explaining why the server exited.
+// This method should only be called after the channel returned
+// by Done is closed.
+func (o *Server) Err() error {
+	return o.err
+}
+
 // Close stops the Server.
 func (o *Server) Close() error {
 	select {
