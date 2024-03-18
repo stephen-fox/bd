@@ -296,18 +296,6 @@ func daemon(flagSet *flag.FlagSet) error {
 	return runner.Loop(ctx)
 }
 
-func consoleSocketPath(vmName string) string {
-	return filepath.Join(dataDirPath(vmName), "console.sock")
-}
-
-func powerStateSocketPath(vmName string) string {
-	return filepath.Join(dataDirPath(vmName), "power.sock")
-}
-
-func dataDirPath(vmName string) string {
-	return filepath.Join("/var", vmName)
-}
-
 func power(flagSet *flag.FlagSet) error {
 	_ = flagSet.Parse(os.Args[2:])
 
@@ -411,6 +399,18 @@ func console(flagSet *flag.FlagSet) error {
 	}()
 
 	return <-errs
+}
+
+func consoleSocketPath(vmName string) string {
+	return filepath.Join(dataDirPath(vmName), "console.sock")
+}
+
+func powerStateSocketPath(vmName string) string {
+	return filepath.Join(dataDirPath(vmName), "power.sock")
+}
+
+func dataDirPath(vmName string) string {
+	return filepath.Join("/var", vmName)
 }
 
 type fileModeFlag struct {
