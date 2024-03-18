@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"os"
 )
 
@@ -70,8 +71,10 @@ func (o *FdUpdaterFnBuilder) Build() map[int]func(*os.File) error {
 	return o.idxToFns
 }
 
+// TODO: Use a slice instead of a map.
+//
 // NewClient instantiates a Client.
-func NewClient(ctx context.Context, unixConn FdConn, idxToFns map[int]func(*os.File) error) *Client {
+func NewClient(ctx context.Context, unixConn *net.UnixConn, idxToFns map[int]func(*os.File) error) *Client {
 	client := &Client{
 		unixConn: unixConn,
 		setFns:   idxToFns,
@@ -97,7 +100,7 @@ func NewClient(ctx context.Context, unixConn FdConn, idxToFns map[int]func(*os.F
 // The FdUpdaterFnBuilder can be used to simplify the generation of
 // this map.
 type Client struct {
-	unixConn FdConn
+	unixConn *net.UnixConn
 	setFns   map[int]func(*os.File) error
 	getErr   chan error
 	done     chan struct{}
