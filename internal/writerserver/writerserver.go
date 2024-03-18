@@ -1,0 +1,210 @@
+package writerserver
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"time"
+)
+
+const (
+	NoClientFlag uint8 = iota
+	BufferedOutputClientFlag
+)
+
+// ListenerCtx implements useful context.Context methods and allows
+// callers to learn of new connections as they are accepted.
+type ListenerCtx interface {
+	Conns() <-chan net.Conn
+	Done() <-chan struct{}
+	Err() error
+}
+
+// Config configures a Server.
+type Config struct {
+	// Listener is the ListenerCtx to listen for connections on.
+	Listener ListenerCtx
+
+	// ClientDest is the io.Writer to send client writes to.
+	ClientDest io.Writer
+
+	// OptLogFile is an optional log to write console output to.
+	OptLogFile io.Writer
+}
+
+// New instantiates a Server.
+func New(ctx context.Context, config Config) *Server {
+	server := &Server{
+		config:    config,
+		toClients: make(chan writeEvent),
+		close:     make(chan struct{}),
+		done:      make(chan struct{}),
+	}
+
+	go server.loop(ctx)
+
+	return server
+}
+
+// Server serves clients, writing their input to an io.Writer. It buffers
+// and data provided to the Write method, eventually writing it to any
+// new or existing clients.
+type Server struct {
+	config    Config
+	toClients chan writeEvent
+	close     chan struct{}
+	done      chan struct{}
+	err       error
+}
+
+// Close stops the Server.
+func (o *Server) Close() error {
+	select {
+	case <-o.done:
+		return o.err
+	case o.close <- struct{}{}:
+		return nil
+	}
+}
+
+// Write writes the provided []byte to a buffer and any existing clients.
+func (o *Server) Write(b []byte) (int, error) {
+	cb := make(chan writeEventResult, 1)
+
+	select {
+	case <-o.done:
+		return 0, o.err
+	case o.toClients <- writeEvent{
+		b:  b,
+		cb: cb,
+	}:
+	}
+
+	select {
+	case <-o.done:
+		return 0, o.err
+	case result := <-cb:
+		return result.n, result.err
+	}
+}
+
+func (o *Server) loop(ctx context.Context) {
+	currentConns := make(map[net.Conn]struct{})
+
+	defer func() {
+		if o.err == nil {
+			o.err = errors.New("unknown error")
+		}
+
+		errMsg := []byte(o.err.Error() + "\n")
+
+		for conn := range currentConns {
+			_ = conn.SetWriteDeadline(time.Now().Add(time.Second))
+
+			_, _ = conn.Write(errMsg)
+
+			_ = conn.Close()
+
+			delete(currentConns, conn)
+		}
+
+		close(o.done)
+	}()
+
+	closeConns := make(chan net.Conn)
+
+	fromProxBufMaxBytes := 1024
+	fromProcBuf := bytes.NewBuffer(nil)
+
+loop:
+	select {
+	case <-ctx.Done():
+		o.err = ctx.Err()
+		return
+	case <-o.close:
+		o.err = errors.New("daemon has shutdown")
+		return
+	case <-o.config.Listener.Done():
+		o.err = fmt.Errorf("listener is done - %w", o.config.Listener.Err())
+		return
+	case conn := <-o.config.Listener.Conns():
+		setDeadLineErr := conn.SetReadDeadline(time.Now().Add(time.Second))
+		if setDeadLineErr == nil {
+			options := make([]byte, 1)
+
+			_, _ = conn.Read(options)
+
+			if fromProcBuf.Len() > 0 && options[0]&BufferedOutputClientFlag != 0 {
+				_, err := fromProcBuf.WriteTo(conn)
+				if err != nil {
+					_ = conn.Close()
+					goto loop
+				}
+			}
+
+			_ = conn.SetReadDeadline(time.Time{})
+		}
+
+		go func() {
+			_, _ = io.Copy(o.config.ClientDest, conn)
+			select {
+			case closeConns <- conn:
+			case <-ctx.Done():
+				_ = conn.Close()
+			}
+		}()
+
+		currentConns[conn] = struct{}{}
+	case closeThis := <-closeConns:
+		_ = closeThis.Close()
+		delete(currentConns, closeThis)
+	case write := <-o.toClients:
+		var n int
+		var err error
+		if o.config.OptLogFile != nil {
+			n, err = o.config.OptLogFile.Write(write.b)
+		} else {
+			n = len(write.b)
+		}
+
+		write.cb <- writeEventResult{
+			n:   n,
+			err: err,
+		}
+
+		if len(currentConns) == 0 {
+			fromProcBuf.Write(write.b)
+
+			if fromProcBuf.Len() > fromProxBufMaxBytes {
+				discard := fromProcBuf.Len() - fromProxBufMaxBytes
+
+				io.CopyN(io.Discard, fromProcBuf, int64(discard))
+			}
+		}
+
+		for conn := range currentConns {
+			_, connErr := conn.Write(write.b)
+			if connErr != nil {
+				_ = conn.Close()
+				delete(currentConns, conn)
+			}
+		}
+	}
+
+	goto loop
+}
+
+// TODO: Refactor to use pointers and "ready" channel
+// to indicate callback is complete.
+type writeEvent struct {
+	b  []byte
+	cb chan<- writeEventResult
+}
+
+type writeEventResult struct {
+	n   int
+	err error
+}
