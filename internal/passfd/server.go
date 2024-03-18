@@ -67,7 +67,7 @@ func (o *ListenerServer) SetFds(ctx context.Context, fds []*os.File) error {
 
 func (o *ListenerServer) loop(ctx context.Context) {
 	var currentFds []*os.File
-	currentConns := make(map[*net.UnixConn]struct{})
+	currentConns := make(map[UnixConn]struct{})
 
 	defer func() {
 		if o.err == nil {
@@ -94,9 +94,9 @@ func (o *ListenerServer) loop(ctx context.Context) {
 			o.err = fmt.Errorf("listener is done - %w", o.listener.Err())
 			return
 		case conn := <-o.listener.Conns():
-			unixConn, ok := conn.(*net.UnixConn)
+			unixConn, ok := conn.(UnixConn)
 			if !ok {
-				o.err = fmt.Errorf("expected *net.UnixConn - got %T", conn)
+				o.err = fmt.Errorf("expected net.Conn to implement UnixConn - got %T", conn)
 				return
 			}
 
@@ -112,7 +112,7 @@ func (o *ListenerServer) loop(ctx context.Context) {
 	}
 }
 
-func (o *ListenerServer) broadcastFds(fds []*os.File, currentConns map[*net.UnixConn]struct{}) {
+func (o *ListenerServer) broadcastFds(fds []*os.File, currentConns map[UnixConn]struct{}) {
 	if len(fds) == 0 {
 		return
 	}
@@ -127,7 +127,7 @@ func (o *ListenerServer) broadcastFds(fds []*os.File, currentConns map[*net.Unix
 	}
 }
 
-func (o *ListenerServer) sendFdsTo(fds []*os.File, conn *net.UnixConn) error {
+func (o *ListenerServer) sendFdsTo(fds []*os.File, conn UnixConn) error {
 	if len(fds) == 0 {
 		return nil
 	}
