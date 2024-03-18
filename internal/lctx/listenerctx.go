@@ -29,6 +29,23 @@ func ListenUnixPath(ctx context.Context, filePath string, perm os.FileMode) (*Li
 	return FromNetListener(ctx, listener), nil
 }
 
+// FromFileDescriptor converts the provided file descriptor to a net.Listener
+// and wraps it with a ListenerCtx.
+func FromFileDescriptor(ctx context.Context, fd uintptr, optName string) (*ListenerCtx, error) {
+	file := os.NewFile(fd, optName)
+	if file == nil {
+		return nil, fmt.Errorf("os newfile returned a nil file for fd %d - invalid file descriptor", fd)
+	}
+	defer file.Close()
+
+	listener, err := net.FileListener(file)
+	if err != nil {
+		return nil, fmt.Errorf("net filelistener failed - %w", err)
+	}
+
+	return FromNetListener(ctx, listener), nil
+}
+
 // FromNetListener returns a new ListenerCtx that wraps the
 // provided net.Listener.
 func FromNetListener(ctx context.Context, listener net.Listener) *ListenerCtx {
