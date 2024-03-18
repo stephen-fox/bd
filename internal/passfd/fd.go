@@ -1,4 +1,4 @@
-package fdserver
+package passfd
 
 // This code is copied from:
 // github.com/ftrvxmtrx/fd

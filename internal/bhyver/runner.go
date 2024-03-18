@@ -11,11 +11,11 @@ import (
 	"syscall"
 	"time"
 
-	"gitlab.com/stephen-fox/bhyved/internal/fdserver"
+	"gitlab.com/stephen-fox/bhyved/internal/passfd"
 )
 
 // NewRunner instantiates a Runner.
-func NewRunner(vmName string, bhyveArgs []string, powerRequests <-chan PowerStateRequest, consoleFds *fdserver.ListenerServer) *Runner {
+func NewRunner(vmName string, bhyveArgs []string, powerRequests <-chan PowerStateRequest, consoleFds *passfd.ListenerServer) *Runner {
 	return &Runner{
 		vmName:    vmName,
 		bhyveArgs: bhyveArgs,
@@ -30,7 +30,7 @@ func NewRunner(vmName string, bhyveArgs []string, powerRequests <-chan PowerStat
 type Runner struct {
 	vmName    string
 	bhyveArgs []string
-	consoleFD *fdserver.ListenerServer
+	consoleFD *passfd.ListenerServer
 	powerReqs <-chan PowerStateRequest
 	exited    chan error
 	execCmd   *exec.Cmd

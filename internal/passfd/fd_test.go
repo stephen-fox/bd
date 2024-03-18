@@ -1,4 +1,4 @@
-package fdserver
+package passfd
 
 import (
 	"net"

@@ -23,9 +23,9 @@ import (
 	"syscall"
 
 	"gitlab.com/stephen-fox/bhyved/internal/bhyver"
-	"gitlab.com/stephen-fox/bhyved/internal/fdserver"
 	"gitlab.com/stephen-fox/bhyved/internal/hsio"
 	"gitlab.com/stephen-fox/bhyved/internal/lctx"
+	"gitlab.com/stephen-fox/bhyved/internal/passfd"
 )
 
 const (
@@ -288,7 +288,7 @@ func daemon(flagSet *flag.FlagSet) error {
 	}
 	defer consoleListener.Close()
 
-	consoleFds := fdserver.ServeListener(ctx, consoleListener)
+	consoleFds := passfd.ServeListener(ctx, consoleListener)
 
 	// TODO: Fix serial console log file.
 	runner := bhyver.NewRunner(vmName, flagSet.Args(), powerStateRequests, consoleFds)
@@ -360,12 +360,12 @@ func console(flagSet *flag.FlagSet) error {
 	consoleStdin := hsio.NewWriteCloser()
 	consoleStdout := hsio.NewReadCloser()
 
-	consoleFdFns := fdserver.NewFdUpdaterFnBuilder().
+	consoleFdFns := passfd.NewFdUpdaterFnBuilder().
 		AddWriter(consoleStdin).
 		AddReader(consoleStdout).
 		Build()
 
-	fdserver.NewClient(context.Background(), unixConn, consoleFdFns)
+	passfd.NewClient(context.Background(), unixConn, consoleFdFns)
 
 	// ignoredSignals := make(chan os.Signal)
 	// signal.Notify(ignoredSignals, syscall.SIGINT)
