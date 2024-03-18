@@ -3,7 +3,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -22,8 +21,8 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
-	"time"
 
+	"gitlab.com/stephen-fox/bhyved/internal/bhyver"
 	"gitlab.com/stephen-fox/bhyved/internal/fdserver"
 	"gitlab.com/stephen-fox/bhyved/internal/hsio"
 	"gitlab.com/stephen-fox/bhyved/internal/lctx"
@@ -45,11 +44,6 @@ DESCRIPTION
 
 OPTIONS
 `
-)
-
-const (
-	noClientFlag uint8 = iota
-	bufferedOutputClientFlag
 )
 
 func main() {
@@ -283,7 +277,7 @@ func daemon(flagSet *flag.FlagSet) error {
 	}
 	defer powerStateListener.Close()
 
-	powerStateRequests := powerStateRequestsHanlder(ctx, powerStateListener)
+	powerStateRequests := bhyver.PowerStateRequestsHanlder(ctx, powerStateListener)
 
 	consoleListener, err := lctx.ListenUnixPath(
 		ctx,
@@ -297,9 +291,9 @@ func daemon(flagSet *flag.FlagSet) error {
 	consoleFds := fdserver.ServeListener(ctx, consoleListener)
 
 	// TODO: Fix serial console log file.
-	bm := newBhyveManager(vmName, flagSet.Args(), powerStateRequests, consoleFds)
+	runner := bhyver.NewRunner(vmName, flagSet.Args(), powerStateRequests, consoleFds)
 
-	return bm.loop(ctx)
+	return runner.Loop(ctx)
 }
 
 func consoleSocketPath(vmName string) string {
@@ -312,488 +306,6 @@ func powerStateSocketPath(vmName string) string {
 
 func dataDirPath(vmName string) string {
 	return filepath.Join("/var", vmName)
-}
-
-func newBhyveManager(vmName string, bhyveArgs []string, powerRequests <-chan powerStateRequest, consoleFds *fdserver.ListenerServer) *bhyveManager {
-	return &bhyveManager{
-		vmName:    vmName,
-		bhyveArgs: bhyveArgs,
-		consoleFD: consoleFds,
-		powerReqs: powerRequests,
-		exited:    make(chan error, 1),
-		stderr:    bytes.NewBuffer(nil),
-	}
-}
-
-type bhyveManager struct {
-	vmName    string
-	bhyveArgs []string
-	consoleFD *fdserver.ListenerServer
-	powerReqs <-chan powerStateRequest
-	exited    chan error
-	execCmd   *exec.Cmd
-	stderr    *bytes.Buffer
-}
-
-func (o *bhyveManager) loop(ctx context.Context) error {
-	err := o.start(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to start bhyve for the first time - %w", err)
-	}
-
-	for {
-		select {
-		case <-ctx.Done():
-			timeout := time.Minute
-
-			log.Printf("shutting down due to %s - waiting %s for bhyve to exit...",
-				ctx.Err(), timeout.String())
-
-			stopCtx, cancelFn := context.WithTimeout(context.Background(), timeout)
-			defer cancelFn()
-
-			err := o.acpiOffOrKill(stopCtx)
-			if err != nil {
-				log.Printf("failed to stop bhyve on shutdown - %s", err)
-			} else {
-				log.Println("successfully stopped bhyve")
-			}
-
-			return ctx.Err()
-		case powerRequest := <-o.powerReqs:
-			clientMsg, err := o.onPowerStateRequest(ctx, powerRequest.newState)
-
-			if clientMsg != "" {
-				powerRequest.cb <- errors.New(clientMsg)
-			} else {
-				powerRequest.cb <- nil
-			}
-			close(powerRequest.cb)
-
-			if err != nil {
-				return fmt.Errorf("failed to handle power state change - %w", err)
-			}
-		case exitedErr := <-o.exited:
-			err := o.onExecCmdExit(ctx, exitedErr)
-			if err != nil {
-				return fmt.Errorf("failed to handle bhyve exit error - %w", err)
-			}
-		}
-	}
-}
-
-func (o *bhyveManager) onPowerStateRequest(ctx context.Context, newState powerState) (clientMsg string, err error) {
-	log.Printf("received power state request - new state: %q", newState.String())
-
-	switch newState {
-	case onPowerState:
-		err := o.start(ctx)
-		if err != nil {
-			return err.Error(), fmt.Errorf("failed to start vm - %w", err)
-		}
-
-		return "", nil
-	case acpiOffPowerState:
-		err := o.acpiOffOrKill(ctx)
-		if err != nil {
-			return err.Error(), fmt.Errorf("failed to acpi power off - %w", err)
-		}
-
-		return "", nil
-	case acpiRebootPowerState:
-		err := o.acpiOffOrKill(ctx)
-		if err != nil {
-			return err.Error(), fmt.Errorf("failed to acpi power off for reboot - %w", err)
-		}
-
-		err = o.start(ctx)
-		if err != nil {
-			return err.Error(), fmt.Errorf("failed to start for reboot - %w", err)
-		}
-
-		return "", nil
-	case pullPowerCablePowerState:
-		err := o.pullPowerCable(ctx)
-		if err != nil {
-			return err.Error(), fmt.Errorf("failed to pull power cable - %w", err)
-		}
-
-		return "", nil
-	case pullPowerCableRebootPowerState:
-		err := o.pullPowerCable(ctx)
-		if err != nil {
-			return err.Error(), fmt.Errorf("failed to pull power cable for reboot - %w", err)
-		}
-
-		err = o.start(ctx)
-		if err != nil {
-			return err.Error(), fmt.Errorf("failed to start for pull power cable reboot - %w", err)
-		}
-
-		return "", nil
-	default:
-		log.Println("[warn] unknown power state type was requested")
-
-		return "unknown power state type", nil
-	}
-}
-
-func (o *bhyveManager) start(ctx context.Context) error {
-	if o.isRunning() {
-		log.Printf("[warn] - bhyve start was attempted, but process is already running")
-
-		return nil
-	}
-
-	log.Println("starting bhyve...")
-
-	// TODO: Check if the VM exists first.
-	o.bhyvectl(ctx, "destroy")
-
-	o.stderr.Reset()
-
-	bhyve := exec.Command("/usr/sbin/bhyve", o.bhyveArgs...)
-
-	bhyve.SysProcAttr = &syscall.SysProcAttr{
-		// We set Setpgid to true because, by default,
-		// a signal sent to us will be automatically
-		// sent to any children (i.e., pressing ctrl+c
-		// to send SIGINT to bhyved will also send
-		// a SIGINT to the bhyve child process).
-		// This is bad because SIGINT makes bhyve
-		// exit immediately.
-		//
-		// Setting this to true assigns bhyve to a new
-		// process group ID, which will not receive
-		// signals sent to the parent process.
-		Setpgid: true,
-	}
-
-	bhyve.Stderr = o.stderr
-
-	stdin, err := bhyve.StdinPipe()
-	if err != nil {
-		return fmt.Errorf("failed to create stdin pipe - %w", err)
-	}
-
-	stdinFile, ok := stdin.(*os.File)
-	if !ok {
-		return fmt.Errorf("expected stdin pipe to be *os.File - got %T", stdin)
-	}
-
-	stdout, err := bhyve.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("failed to create stdout pipe - %w", err)
-	}
-
-	stdoutFile, ok := stdout.(*os.File)
-	if !ok {
-		return fmt.Errorf("expected stdout pipe to be *os.File - got %T", stdin)
-	}
-
-	err = o.consoleFD.SetFds(ctx, []*os.File{stdinFile, stdoutFile})
-	if err != nil {
-		return fmt.Errorf("failed to set console fds - %w", err)
-	}
-
-	log.Printf("exec'ing bhyve with argv: %q...", bhyve.String())
-
-	err = bhyve.Start()
-	if err != nil {
-		o.consoleFD.SetFds(ctx, nil)
-
-		_ = stdin.Close()
-		_ = stdout.Close()
-
-		return fmt.Errorf("failed to start bhyve - %w", err)
-	}
-
-	o.execCmd = bhyve
-
-	go func() {
-		err := bhyve.Wait()
-
-		log.Printf("bhyve exited - exec.cmd error is %v", err)
-
-		o.exited <- err
-	}()
-
-	return nil
-}
-
-func (o *bhyveManager) acpiOffOrKill(ctx context.Context) error {
-	if !o.isRunning() {
-		log.Println("[warn] acpi off requested, but bhyve is not running")
-
-		return nil
-	}
-
-	log.Println("acpi powering off or killing bhyve...")
-
-	// Trigger ACPI poweroff, refer to "man bhyve" for more info.
-	err := o.execCmd.Process.Signal(syscall.SIGTERM)
-	if err != nil {
-		log.Printf("failed to send sigterm to bhyve - %s", err)
-	}
-
-	select {
-	case <-ctx.Done():
-		pullPowerCtx, cancelFn := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancelFn()
-
-		_ = o.pullPowerCable(pullPowerCtx)
-
-		return ctx.Err()
-	case err = <-o.exited:
-		log.Printf("bhyve process exited after sending sigterm - destroying vm with bhyvectl... (child err: %v)", err)
-
-		err = o.bhyvectl(ctx, "--destroy")
-		if err != nil {
-			log.Printf("failed to destroy vm after stopping it - %s", err)
-		}
-
-		return nil
-	}
-}
-
-func (o *bhyveManager) pullPowerCable(ctx context.Context) error {
-	if !o.isRunning() {
-		log.Println("[warn] pull power cable requested, but bhyve is not running")
-
-		return nil
-	}
-
-	log.Println("pulling power cable from bhyve...")
-
-	defer func() {
-		log.Println("destroying vm with bhyvectl...")
-
-		err := o.bhyvectl(ctx, "--destroy")
-		if err != nil {
-			log.Printf("failed to destroy vm after stopping it - %s", err)
-		}
-	}()
-
-	_ = o.execCmd.Process.Signal(syscall.SIGKILL)
-
-	select {
-	case <-ctx.Done():
-		log.Printf("timed-out waiting for bhyve to exit after sending sigkill - %s",
-			ctx.Err())
-
-		return ctx.Err()
-	case <-o.exited:
-		log.Println("bhyve exited after sending sigkill")
-
-		return nil
-	}
-}
-
-func (o *bhyveManager) bhyvectl(ctx context.Context, arg string, args ...string) error {
-	bhyvectl := exec.CommandContext(
-		ctx,
-		"/usr/sbin/bhyvectl",
-		"--vm",
-		o.vmName,
-		arg)
-
-	if len(args) > 0 {
-		bhyvectl.Args = append(bhyvectl.Args, args...)
-	}
-
-	out, err := bhyvectl.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("failed to execute %q - %w - output: %s",
-			bhyvectl.String(), err, out)
-	}
-
-	return nil
-}
-
-func (o *bhyveManager) isRunning() bool {
-	// Exec.Cmd.ProcessState is non-nil if the process has exited.
-	return o.execCmd != nil && o.execCmd.ProcessState == nil
-}
-
-func (o *bhyveManager) onExecCmdExit(ctx context.Context, exitedErr error) error {
-	setFdsErr := o.consoleFD.SetFds(ctx, nil)
-	if setFdsErr != nil {
-		log.Printf("[warn] failed to set console fds to nil on byve exit - %s", setFdsErr)
-	}
-
-	// Note: Refer to "man bhyve" for exit status info.
-	if exitedErr == nil {
-		// err == nil means exit status 0.
-		log.Println("bhyve exited with status 0 - vm was rebooted")
-
-		exitedErr = o.start(ctx)
-		if exitedErr != nil {
-			return fmt.Errorf("failed to start bhyve for vm reboot - %w", exitedErr)
-		}
-
-		return nil
-	}
-
-	var execExitErr *exec.ExitError
-	if errors.As(exitedErr, &execExitErr) {
-		switch execExitErr.ExitCode() {
-		case 1:
-			// Powered off.
-			log.Println("bhyve exited with status 1 - vm was powered off")
-		case 2:
-			// Halted.
-			log.Println("bhyve exited with status 2 - vm was halted")
-		case 3:
-			// Triple fault.
-			log.Println("bhyve exited with status 3 - vm triple faulted")
-		case 4:
-			return fmt.Errorf("bhyve exited due a bhyve error (status 4) - %w - stderr: %s",
-				exitedErr, o.stderr.String())
-		default:
-			return fmt.Errorf("bhyve exited due to an unknown bhyve error (status %d) - %w - stderr: %s",
-				execExitErr.ExitCode(), exitedErr, o.stderr.String())
-		}
-	} else {
-		log.Printf("bhyve process exited unexpectedly - %s - stderr: %s",
-			exitedErr, o.stderr.String())
-	}
-
-	return nil
-}
-
-func powerStateRequestsHanlder(ctx context.Context, listener *lctx.ListenerCtx) <-chan powerStateRequest {
-	requests := make(chan powerStateRequest)
-
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				// TODO: Tell something about this.
-				log.Printf("power state handler exiting - %s", ctx.Err())
-
-				return
-			case <-listener.Done():
-				// TODO: Tell something about this.
-				log.Printf("listener is done - %s", listener.Err())
-
-				return
-			case conn := <-listener.Conns():
-				err := handlePowerStateRequest(ctx, requests, conn)
-				if err != nil {
-					// TODO: Tell something about this.
-					log.Printf("power state handler exiting - %s", err)
-
-					return
-				}
-			}
-		}
-	}()
-
-	return requests
-}
-
-func handlePowerStateRequest(ctx context.Context, requests chan powerStateRequest, conn net.Conn) error {
-	defer conn.Close()
-
-	sendMsgFn := func(msg string) error {
-		_, err := conn.Write([]byte(msg + "\n"))
-		return err
-	}
-
-	conn.SetReadDeadline(time.Now().Add(30 * time.Second))
-
-	scanner := bufio.NewScanner(io.LimitReader(conn, 512))
-
-	if !scanner.Scan() {
-		return nil
-	}
-
-	text := scanner.Text()
-
-	state := powerStateFromString(text)
-	if state == unknownPowerState {
-		sendMsgFn(fmt.Sprintf("error: unknown power state: %q", text))
-
-		return nil
-	}
-
-	cb := make(chan error, 1)
-
-	select {
-	case <-ctx.Done():
-		sendMsgFn(fmt.Sprintf("error: %s", ctx.Err().Error()))
-
-		return ctx.Err()
-	case requests <- powerStateRequest{
-		newState: state,
-		cb:       cb,
-	}:
-	}
-
-	select {
-	case <-ctx.Done():
-		sendMsgFn(fmt.Sprintf("error: %s", ctx.Err().Error()))
-
-		return ctx.Err()
-	case err := <-cb:
-		if err != nil {
-			sendMsgFn(fmt.Sprintf("error: %s", err.Error()))
-		} else {
-			sendMsgFn("")
-		}
-	}
-
-	return nil
-}
-
-func powerStateFromString(str string) powerState {
-	switch str {
-	case onPowerState.String():
-		return onPowerState
-	case acpiOffPowerState.String():
-		return acpiOffPowerState
-	case acpiRebootPowerState.String():
-		return acpiRebootPowerState
-	case pullPowerCablePowerState.String():
-		return pullPowerCablePowerState
-	case pullPowerCableRebootPowerState.String():
-		return pullPowerCableRebootPowerState
-	default:
-		return unknownPowerState
-	}
-}
-
-type powerState int
-
-func (o powerState) String() string {
-	switch o {
-	case onPowerState:
-		return "on"
-	case acpiOffPowerState:
-		return "off"
-	case acpiRebootPowerState:
-		return "reboot"
-	case pullPowerCablePowerState:
-		return "pull-cable"
-	case pullPowerCableRebootPowerState:
-		return "pull-cable-reboot"
-	default:
-		return "unknown power state"
-	}
-}
-
-const (
-	unknownPowerState powerState = iota
-	onPowerState
-	acpiOffPowerState
-	acpiRebootPowerState
-	pullPowerCablePowerState
-	pullPowerCableRebootPowerState
-)
-
-type powerStateRequest struct {
-	newState powerState
-	cb       chan error
 }
 
 func power(flagSet *flag.FlagSet) error {
@@ -809,8 +321,8 @@ func power(flagSet *flag.FlagSet) error {
 		return errors.New("please specify a power state as the last non-flag argument")
 	}
 
-	state := powerStateFromString(powerStateStr)
-	if state == unknownPowerState {
+	state := bhyver.PowerStateFromString(powerStateStr)
+	if state == bhyver.UnknownPowerState {
 		return fmt.Errorf("unknown power state type: %q", powerStateStr)
 	}
 
