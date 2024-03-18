@@ -67,7 +67,7 @@ func mainWithError() error {
 	}
 
 	if flag.NArg() == 0 {
-		return errors.New("please specify a mode ('client' or 'daemon') or '-h' for more information")
+		return errors.New("please specify a mode as a non-flag argument or '-h' for more information")
 	}
 
 	flagSet := flag.NewFlagSet(flag.Arg(0), flag.ExitOnError)
