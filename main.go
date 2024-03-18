@@ -16,16 +16,19 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"os/user"
 	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"gitlab.com/stephen-fox/bhyved/internal/bhyver"
 	"gitlab.com/stephen-fox/bhyved/internal/hsio"
 	"gitlab.com/stephen-fox/bhyved/internal/lctx"
 	"gitlab.com/stephen-fox/bhyved/internal/passfd"
+	"gitlab.com/stephen-fox/bhyved/internal/writerserver"
 )
 
 const (
@@ -77,6 +80,8 @@ func mainWithError() error {
 		return genmac()
 	case "daemon":
 		return daemon(flagSet)
+	case "console-daemon":
+		return consoleDaemon(flagSet)
 	case "power":
 		return power(flagSet)
 	case "console":
@@ -279,21 +284,182 @@ func daemon(flagSet *flag.FlagSet) error {
 
 	powerStateRequests := bhyver.PowerStateRequestsHanlder(ctx, powerStateListener)
 
-	consoleListener, err := lctx.ListenUnixPath(
-		ctx,
-		consoleSocketPath(vmName),
-		socketMode.mode)
+	consoleClientsListener, err := net.Listen("unix", consoleSocketPath(vmName))
 	if err != nil {
-		return fmt.Errorf("failed to create console unix socket - %w", err)
+		return fmt.Errorf("failed to create console clients unix socket - %w", err)
 	}
-	defer consoleListener.Close()
+	defer consoleClientsListener.Close()
 
-	consoleFds := passfd.ServeListener(ctx, consoleListener)
+	log.Println("setting up console daemon...")
 
-	// TODO: Fix serial console log file.
-	runner := bhyver.NewRunner(vmName, flagSet.Args(), powerStateRequests, consoleFds)
+	consoleFdsSocket, err := execConsoleDaemon(ctx, consoleOutputLog, consoleClientsListener)
+	if err != nil {
+		return fmt.Errorf("failed to start console daemon - %w", err)
+	}
+
+	log.Println("console daemon started successfully")
+
+	runner := bhyver.NewRunner(vmName, flagSet.Args(), powerStateRequests, consoleFdsSocket)
 
 	return runner.Loop(ctx)
+}
+
+func execConsoleDaemon(ctx context.Context, consoleLog *os.File, consoleClients net.Listener) (*net.UnixConn, error) {
+	runAsUID, runAsGID, err := lookupUser("nobody")
+	if err != nil {
+		return nil, fmt.Errorf("failed to lookup run as user - %w", err)
+	}
+
+	clientsUnixListener, ok := consoleClients.(*net.UnixListener)
+	if !ok {
+		return nil, fmt.Errorf("expected consoleClients to be *net.UnixListener - got %T",
+			consoleClients)
+	}
+
+	clientsListener, err := clientsUnixListener.File()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get file descriptor for console clients listener - %w",
+			err)
+	}
+	defer clientsListener.Close()
+
+	ourConsoleFdSocket, theirConsoleFdSocket, err := passfd.SharableUnixSocketpair(
+		syscall.SOCK_STREAM, 0)
+	if err != nil {
+		return nil, fmt.Errorf("sharable socketpair failed - %w", err)
+	}
+	defer theirConsoleFdSocket.Close()
+
+	consoleDaemon := exec.CommandContext(ctx, os.Args[0], "console-daemon")
+
+	consoleDaemon.SysProcAttr = &syscall.SysProcAttr{
+		Credential: &syscall.Credential{
+			Uid: runAsUID,
+			Gid: runAsGID,
+		},
+	}
+
+	consoleDaemon.ExtraFiles = []*os.File{
+		consoleLog,
+		clientsListener,
+		theirConsoleFdSocket,
+	}
+
+	stdout, err := consoleDaemon.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create stdout pipe - %w", err)
+	}
+	defer stdout.Close()
+
+	err = consoleDaemon.Start()
+	if err != nil {
+		return nil, fmt.Errorf("failed to start child process - %w", err)
+	}
+	defer consoleLog.Close()
+
+	gotWrite := make(chan error, 1)
+
+	go func() {
+		_, err := stdout.Read(make([]byte, 1))
+		gotWrite <- err
+	}()
+
+	timeout := 10 * time.Second
+
+	select {
+	case <-ctx.Done():
+		_ = consoleDaemon.Process.Kill()
+
+		return nil, ctx.Err()
+	case <-time.After(timeout):
+		_ = consoleDaemon.Process.Kill()
+
+		return nil, fmt.Errorf("timed-out waiting for write from child after %s", timeout)
+	case err = <-gotWrite:
+		if err != nil {
+			_ = consoleDaemon.Process.Kill()
+
+			return nil, fmt.Errorf("failed to receive ready write from child - %w", err)
+		}
+
+		return ourConsoleFdSocket, nil
+	}
+}
+
+func lookupUser(username string) (uid uint32, gid uint32, err error) {
+	account, err := user.Lookup(username)
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to lookup user '%s' - %w", username, err)
+	}
+
+	uidI, err := strconv.ParseUint(account.Uid, 10, 32)
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to parse uid - %w", err)
+	}
+
+	gidI, err := strconv.ParseUint(account.Gid, 10, 32)
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to parse gid - %w", err)
+	}
+
+	return uint32(uidI), uint32(gidI), err
+}
+
+func consoleDaemon(flagSet *flag.FlagSet) error {
+	_ = flagSet.Parse(os.Args[2:])
+
+	ctx, cancelFn := signal.NotifyContext(context.Background(),
+		syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+	defer cancelFn()
+
+	// fd 3 should be the console log file.
+	consoleLogFile := os.NewFile(3, "")
+	if consoleLogFile == nil {
+		return errors.New("os newfile returned nil for the console log file - invalid fd")
+	}
+
+	// fd 4 should be a listener.
+	consoleClientsListener, err := lctx.FromFileDescriptor(ctx, 4, "")
+	if err != nil {
+		return fmt.Errorf("failed to convert console clients fd to a listener - %w", err)
+	}
+	defer consoleClientsListener.Close()
+
+	// fd 5 should be a unix socket.
+	consoleFdsConn, err := passfd.UnixConnFromFd(5, "")
+	if err != nil {
+		return fmt.Errorf("failed to convert console sharing fd to a unix conn - %w", err)
+	}
+	defer consoleFdsConn.Close()
+
+	_, err = os.Stdout.Write([]byte{0x41})
+	if err != nil {
+		return err
+	}
+
+	consoleStdin := hsio.NewWriteCloser()
+	consoleStdout := hsio.NewReadCloser()
+
+	consoleFdFns := passfd.NewFdUpdaterFnBuilder().
+		AddWriter(consoleStdin).
+		AddReader(consoleStdout).
+		Build()
+
+	passfd.NewClient(ctx, consoleFdsConn, consoleFdFns)
+
+	writerServer := writerserver.New(ctx, writerserver.Config{
+		Listener: consoleClientsListener,
+		// TODO: Maybe a ClientSrc field?
+		ClientDest: consoleStdin,
+		OptLogFile: consoleLogFile,
+	})
+
+	// TODO: Can we provide a method / config field that does this?
+	go io.Copy(writerServer, consoleStdout)
+
+	<-writerServer.Done()
+
+	return writerServer.Err()
 }
 
 func power(flagSet *flag.FlagSet) error {
@@ -339,6 +505,7 @@ func power(flagSet *flag.FlagSet) error {
 	return nil
 }
 
+// TODO: Drop privs if running as root.
 func console(flagSet *flag.FlagSet) error {
 	_ = flagSet.Parse(os.Args[2:])
 
@@ -352,49 +519,15 @@ func console(flagSet *flag.FlagSet) error {
 	}
 	defer conn.Close()
 
-	unixConn, ok := conn.(*net.UnixConn)
-	if !ok {
-		return fmt.Errorf("expected *net.UnixConn - got %T", conn)
-	}
-
-	consoleStdin := hsio.NewWriteCloser()
-	consoleStdout := hsio.NewReadCloser()
-
-	consoleFdFns := passfd.NewFdUpdaterFnBuilder().
-		AddWriter(consoleStdin).
-		AddReader(consoleStdout).
-		Build()
-
-	passfd.NewClient(context.Background(), unixConn, consoleFdFns)
-
-	// ignoredSignals := make(chan os.Signal)
-	// signal.Notify(ignoredSignals, syscall.SIGINT)
-	// defer signal.Stop(ignoredSignals)
-
-	// go func() {
-	// 	for range ignoredSignals {
-	// 	}
-	// }()
-
-	// stdinState, err := term.GetState(int(os.Stdin.Fd()))
-	// if err != nil {
-	// 	return err
-	// }
-
-	// stdoutState, err := term.GetState(int(os.Stdout.Fd()))
-	// if err != nil {
-	// 	return err
-	// }
-
 	errs := make(chan error, 2)
 
 	go func() {
-		_, err := io.Copy(os.Stdout, consoleStdout)
+		_, err := io.Copy(os.Stdout, conn)
 		errs <- err
 	}()
 
 	go func() {
-		_, err := io.Copy(consoleStdin, os.Stdin)
+		_, err := io.Copy(conn, os.Stdin)
 		errs <- err
 	}()
 

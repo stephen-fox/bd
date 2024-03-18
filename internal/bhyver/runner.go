@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"syscall"
@@ -15,11 +16,11 @@ import (
 )
 
 // NewRunner instantiates a Runner.
-func NewRunner(vmName string, bhyveArgs []string, powerRequests <-chan PowerStateRequest, consoleFds *passfd.ListenerServer) *Runner {
+func NewRunner(vmName string, bhyveArgs []string, powerRequests <-chan PowerStateRequest, consoleFds *net.UnixConn) *Runner {
 	return &Runner{
 		vmName:    vmName,
 		bhyveArgs: bhyveArgs,
-		consoleFD: consoleFds,
+		consoled:  consoleFds,
 		powerReqs: powerRequests,
 		exited:    make(chan error, 1),
 		stderr:    bytes.NewBuffer(nil),
@@ -30,7 +31,7 @@ func NewRunner(vmName string, bhyveArgs []string, powerRequests <-chan PowerStat
 type Runner struct {
 	vmName    string
 	bhyveArgs []string
-	consoleFD *passfd.ListenerServer
+	consoled  *net.UnixConn
 	powerReqs <-chan PowerStateRequest
 	exited    chan error
 	execCmd   *exec.Cmd
@@ -194,17 +195,15 @@ func (o *Runner) start(ctx context.Context) error {
 		return fmt.Errorf("expected stdout pipe to be *os.File - got %T", stdin)
 	}
 
-	err = o.consoleFD.SetFds(ctx, []*os.File{stdinFile, stdoutFile})
+	err = passfd.Put(o.consoled, stdinFile, stdoutFile)
 	if err != nil {
-		return fmt.Errorf("failed to set console fds - %w", err)
+		return fmt.Errorf("failed to send console fds to console daemon - %w", err)
 	}
 
 	log.Printf("exec'ing bhyve with argv: %q...", bhyve.String())
 
 	err = bhyve.Start()
 	if err != nil {
-		o.consoleFD.SetFds(ctx, nil)
-
 		_ = stdin.Close()
 		_ = stdout.Close()
 
@@ -319,11 +318,6 @@ func (o *Runner) isRunning() bool {
 }
 
 func (o *Runner) onExecCmdExit(ctx context.Context, exitedErr error) error {
-	setFdsErr := o.consoleFD.SetFds(ctx, nil)
-	if setFdsErr != nil {
-		log.Printf("[warn] failed to set console fds to nil on byve exit - %s", setFdsErr)
-	}
-
 	// Note: Refer to "man bhyve" for exit status info.
 	if exitedErr == nil {
 		// err == nil means exit status 0.
