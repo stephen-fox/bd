@@ -1,3 +1,31 @@
+package fdserver
+
+// This code is copied from:
+// github.com/ftrvxmtrx/fd
+//
+// I modified it to support the syscall.Socketpair function.
+//
+// LICENSE:
+//
+// Copyright © 2012 Serge Zirukin
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy of
+// this software and associated documentation files (the "Software"), to deal in
+// the Software without restriction, including without limitation the rights to
+// use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+// the Software, and to permit persons to whom the Software is furnished to do so,
+// subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+// FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+// COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+// IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+// CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+//
 // Package fd provides a simple API to pass file descriptors
 // between different OS processes.
 //
@@ -16,13 +44,27 @@
 //   6) New copy reads the state and inherits connections using fd.Get(),
 //      checks that everything is OK and sends the "OK" message to the socket
 //   7) Server receives "OK" message and kills itself
-package fdserver
 
 import (
-	"net"
 	"os"
 	"syscall"
 )
+
+// UnixConn represents a net.UnixConn.
+type UnixConn interface {
+	// File returns a copy of the underlying os.File.
+	// It is the caller's responsibility to close f when finished.
+	// Closing c does not affect f, and closing f does not affect c.
+	//
+	// The returned os.File's file descriptor is different from
+	// the connection's. Attempting to change properties of the
+	// original using this duplicate may or may not have the
+	// desired effect.
+	File() (*os.File, error)
+
+	// Close closes the connection.
+	Close() error
+}
 
 // Get receives file descriptors from a Unix domain socket.
 //
@@ -34,7 +76,7 @@ import (
 // non-empty even if this function returns an error.
 //
 // Use net.FileConn() if you're receiving a network connection.
-func Get(via *net.UnixConn, num int, filenames []string) ([]*os.File, error) {
+func Get(via UnixConn, num int, filenames []string) ([]*os.File, error) {
 	if num < 1 {
 		return nil, nil
 	}
@@ -82,7 +124,7 @@ func Get(via *net.UnixConn, num int, filenames []string) ([]*os.File, error) {
 // Please note that the number of descriptors in one message is limited
 // and is rather small.
 // Use conn.File() to get a file if you want to put a network connection.
-func Put(via *net.UnixConn, files ...*os.File) error {
+func Put(via UnixConn, files ...*os.File) error {
 	if len(files) == 0 {
 		return nil
 	}
