@@ -7,8 +7,6 @@ import (
 	"log"
 	"net"
 	"os"
-
-	"github.com/ftrvxmtrx/fd"
 )
 
 // ListenerCtx implements useful context.Context methods and allows
@@ -134,7 +132,7 @@ func (o *ListenerServer) sendFdsTo(fds []*os.File, conn *net.UnixConn) error {
 		return nil
 	}
 
-	err := fd.Put(conn, fds...)
+	err := Put(conn, fds...)
 	if err != nil {
 		conn.Close()
 
