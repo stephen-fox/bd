@@ -71,7 +71,7 @@ func (o *FdUpdaterFnBuilder) Build() map[int]func(*os.File) error {
 }
 
 // NewClient instantiates a Client.
-func NewClient(ctx context.Context, unixConn UnixConn, idxToFns map[int]func(*os.File) error) *Client {
+func NewClient(ctx context.Context, unixConn FdConn, idxToFns map[int]func(*os.File) error) *Client {
 	client := &Client{
 		unixConn: unixConn,
 		setFns:   idxToFns,
@@ -97,7 +97,7 @@ func NewClient(ctx context.Context, unixConn UnixConn, idxToFns map[int]func(*os
 // The FdUpdaterFnBuilder can be used to simplify the generation of
 // this map.
 type Client struct {
-	unixConn UnixConn
+	unixConn FdConn
 	setFns   map[int]func(*os.File) error
 	getErr   chan error
 	done     chan struct{}

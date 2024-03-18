@@ -50,8 +50,11 @@ import (
 	"syscall"
 )
 
-// UnixConn represents a net.UnixConn.
-type UnixConn interface {
+// FdConn represents a net.Conn that provides access to its underlying
+// file descriptor. A net.UnixConn's file descriptor is used to send
+// and receive file descriptors, amongst other Unix socket-specifc
+// behaviors and functionality.
+type FdConn interface {
 	// File returns a copy of the underlying os.File.
 	// It is the caller's responsibility to close f when finished.
 	// Closing c does not affect f, and closing f does not affect c.
@@ -76,7 +79,7 @@ type UnixConn interface {
 // non-empty even if this function returns an error.
 //
 // Use net.FileConn() if you're receiving a network connection.
-func Get(via UnixConn, num int, filenames []string) ([]*os.File, error) {
+func Get(via FdConn, num int, filenames []string) ([]*os.File, error) {
 	if num < 1 {
 		return nil, nil
 	}
@@ -124,7 +127,7 @@ func Get(via UnixConn, num int, filenames []string) ([]*os.File, error) {
 // Please note that the number of descriptors in one message is limited
 // and is rather small.
 // Use conn.File() to get a file if you want to put a network connection.
-func Put(via UnixConn, files ...*os.File) error {
+func Put(via FdConn, files ...*os.File) error {
 	if len(files) == 0 {
 		return nil
 	}
