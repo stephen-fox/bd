@@ -360,12 +360,12 @@ func console(flagSet *flag.FlagSet) error {
 	consoleStdin := hsio.NewWriteCloser()
 	consoleStdout := hsio.NewReadCloser()
 
-	consoleFdFns := hsio.NewFdUpdaterFnBuilder().
+	consoleFdFns := fdserver.NewFdUpdaterFnBuilder().
 		AddWriter(consoleStdin).
 		AddReader(consoleStdout).
 		Build()
 
-	hsio.NewUnixConnFdUpdater(context.Background(), unixConn, consoleFdFns)
+	fdserver.NewClient(context.Background(), unixConn, consoleFdFns)
 
 	// ignoredSignals := make(chan os.Signal)
 	// signal.Notify(ignoredSignals, syscall.SIGINT)
