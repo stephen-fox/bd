@@ -5,79 +5,41 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"os"
 )
 
+// ReadCloserUpdater represents an io.ReadCloser that can be updated.
 type ReadCloserUpdater interface {
 	Set(io.ReadCloser) error
 }
 
+// ReadCloserUpdaterToRecvFn creates an on recv function for use with Client
+// for the given ReadCloserUpdater.
+func ReadCloserUpdaterToRecvFn(r ReadCloserUpdater) func(*os.File) error {
+	return func(f *os.File) error {
+		return r.Set(f)
+	}
+}
+
+// WriteCloserUpdater represents an io.WriteCloser that can be updated.
 type WriteCloserUpdater interface {
 	Set(io.WriteCloser) error
 }
 
-// NewFdUpdaterFnBuilder instantiates a FdUpdaterFnBuilder.
-func NewFdUpdaterFnBuilder() *FdUpdaterFnBuilder {
-	return &FdUpdaterFnBuilder{}
-}
-
-// FdUpdaterFnBuilder assists in generating the map of file descriptor index
-// number to set functions used by Client.
-type FdUpdaterFnBuilder struct {
-	idxToFns map[int]func(*os.File) error
-}
-
-// AddReader adds the specified ReadCloser to the map. Its index will
-// be equal to the length of the map prior to adding it. In other
-// words, if the first call to the builder is AddReader, then the
-// ReadCloser will be mapped to index 0.
-func (o *FdUpdaterFnBuilder) AddReader(r ReadCloserUpdater) *FdUpdaterFnBuilder {
-	i := o.init()
-
-	o.idxToFns[i] = func(fd *os.File) error {
-		return r.Set(fd)
+// WriteCloserUpdaterToRecvFn creates an on recv function for use with Client
+// for the given WriteCloserUpdater.
+func WriteCloserUpdaterToRecvFn(w WriteCloserUpdater) func(*os.File) error {
+	return func(f *os.File) error {
+		return w.Set(f)
 	}
-
-	return o
 }
 
-// AddWriter adds the specified WriteCloser to the map. Its index will
-// be equal to the length of the map prior to adding it. In other
-// words, if the first call to the builder is AddWriter, then the
-// WriteCloser will be mapped to index 0.
-func (o *FdUpdaterFnBuilder) AddWriter(w WriteCloserUpdater) *FdUpdaterFnBuilder {
-	i := o.init()
-
-	o.idxToFns[i] = func(fd *os.File) error {
-		return w.Set(fd)
-	}
-
-	return o
-}
-
-func (o *FdUpdaterFnBuilder) init() int {
-	if o.idxToFns == nil {
-		o.idxToFns = make(map[int]func(*os.File) error)
-	}
-
-	return len(o.idxToFns)
-}
-
-// Build returns the current map of file descriptor index number to
-// set function.
-func (o *FdUpdaterFnBuilder) Build() map[int]func(*os.File) error {
-	return o.idxToFns
-}
-
-// TODO: Use a slice instead of a map.
-//
 // NewClient instantiates a Client.
-func NewClient(ctx context.Context, unixConn *net.UnixConn, idxToFns map[int]func(*os.File) error) *Client {
+func NewClient(ctx context.Context, unixConn *net.UnixConn, onRecvFns []func(*os.File) error) *Client {
 	client := &Client{
 		unixConn: unixConn,
-		setFns:   idxToFns,
+		recvFns:  onRecvFns,
 		getErr:   make(chan error),
 		done:     make(chan struct{}),
 	}
@@ -87,21 +49,18 @@ func NewClient(ctx context.Context, unixConn *net.UnixConn, idxToFns map[int]fun
 	return client
 }
 
-// Client executes the provided os.File set function each time new file
-// descriptors are pushed to underlying UnixConn. The Client exits when
-// the provided context.Context is marked as done.
+// Client executes the provided functions each time new file descriptors
+// are received on the underlying Unix socket. The Client exits when
+// the provided context.Context is marked as done or an error occurs.
 //
-// Each function is mapped to the slice of os.File pushed to the UnixConn
-// using a map type. In other words, if the map consists of two elements,
-// the Client will expect two file descriptors to be pushed to the UnixConn.
-// The Clientr will then use the index number from the map to select the
-// appropriate set function.
-//
-// The FdUpdaterFnBuilder can be used to simplify the generation of
-// this map.
+// File descriptors are passed to each function based on their index
+// in the array received by the Unix socket. For example, if the slice
+// contains two functions, the Client will expect two file descriptors
+// to be pushed to the Unix socket in a single message. fd[0] would
+// then be passed to recvFns[0] and fd[1] would be passed to recvFns[1].
 type Client struct {
 	unixConn *net.UnixConn
-	setFns   map[int]func(*os.File) error
+	recvFns  []func(*os.File) error
 	getErr   chan error
 	done     chan struct{}
 	err      error
@@ -159,9 +118,9 @@ func (o *Client) getFdsLoop() {
 
 func (o *Client) getFdsLoopWithError() error {
 	for {
-		expNumFds := len(o.setFns)
+		expNumFds := len(o.recvFns)
 		if expNumFds == 0 {
-			return errors.New("indexes to set fns map is empty")
+			return errors.New("on recv fns slice is empty")
 		}
 
 		fds, err := Get(o.unixConn, expNumFds, nil)
@@ -169,17 +128,10 @@ func (o *Client) getFdsLoopWithError() error {
 			return fmt.Errorf("fd get failed - %w", err)
 		}
 
-		log.Printf("TODO: got fds %v - setting them...", fds)
-
 		for i, fd := range fds {
-			fn, ok := o.setFns[i]
-			if !ok {
-				return fmt.Errorf("indexes to set fns map is missing index %d", i)
-			}
-
-			err = fn(fd)
+			err = o.recvFns[i](fd)
 			if err != nil {
-				return fmt.Errorf("set fn for fd index %d failed - %w", i, err)
+				return fmt.Errorf("recv fn for fd index %d failed - %w", i, err)
 			}
 		}
 	}

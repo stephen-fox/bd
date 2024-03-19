@@ -449,12 +449,10 @@ func consoleDaemon(flagSet *flag.FlagSet) error {
 	consoleStdin := hsio.NewWriteCloser()
 	consoleStdout := hsio.NewReadCloser()
 
-	consoleFdFns := passfd.NewFdUpdaterFnBuilder().
-		AddWriter(consoleStdin).
-		AddReader(consoleStdout).
-		Build()
-
-	passfd.NewClient(ctx, consoleFdsConn, consoleFdFns)
+	passFdClient := passfd.NewClient(ctx, consoleFdsConn, []func(*os.File) error{
+		passfd.WriteCloserUpdaterToRecvFn(consoleStdin),
+		passfd.ReadCloserUpdaterToRecvFn(consoleStdout),
+	})
 
 	writerServer := writerserver.New(ctx, writerserver.Config{
 		Listener: consoleClientsListener,
