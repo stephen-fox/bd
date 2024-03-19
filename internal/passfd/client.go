@@ -107,6 +107,19 @@ type Client struct {
 	err      error
 }
 
+// Done returns a channel that is closed when the parent context.Context
+// is marked as done or when an error occurs.
+func (o *Client) Done() <-chan struct{} {
+	return o.done
+}
+
+// Err returns a non-nil error explaining why the Client exited.
+// This method should only be called after the channel returned
+// by Done is closed.
+func (o *Client) Err() error {
+	return o.err
+}
+
 func (o *Client) loop(ctx context.Context) {
 	defer func() {
 		if o.err == nil {
