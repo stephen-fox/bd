@@ -260,6 +260,7 @@ func daemon(flagSet *flag.FlagSet) error {
 		return fmt.Errorf("failed to create vm data directory path - %w", err)
 	}
 
+	// TODO: Should we truncate the log?
 	consoleOutputLog, err := os.OpenFile(
 		filepath.Join(vmDirPath, "console-output.log"),
 		os.O_CREATE|os.O_TRUNC|os.O_WRONLY,
@@ -284,6 +285,7 @@ func daemon(flagSet *flag.FlagSet) error {
 
 	powerStateRequests := bhyver.PowerStateRequestsHanlder(ctx, powerStateListener)
 
+	// TODO: Make serial console optional.
 	consoleClientsListener, err := net.Listen("unix", consoleSocketPath(vmName))
 	if err != nil {
 		return fmt.Errorf("failed to create console clients unix socket - %w", err)
@@ -292,6 +294,7 @@ func daemon(flagSet *flag.FlagSet) error {
 
 	log.Println("setting up console daemon...")
 
+	// TODO: Need a way to send sigterm to child.
 	consoleFdsSocket, err := execConsoleDaemon(ctx, consoleOutputLog, consoleClientsListener)
 	if err != nil {
 		return fmt.Errorf("failed to start console daemon - %w", err)
@@ -405,6 +408,7 @@ func lookupUser(username string) (uid uint32, gid uint32, err error) {
 	return uint32(uidI), uint32(gidI), err
 }
 
+// TODO: Use syslog or writer to stderr if parent is in foreground mode.
 func consoleDaemon(flagSet *flag.FlagSet) error {
 	_ = flagSet.Parse(os.Args[2:])
 
@@ -507,6 +511,8 @@ func power(flagSet *flag.FlagSet) error {
 
 // TODO: Drop privs if running as root.
 func console(flagSet *flag.FlagSet) error {
+	// TODO: Re-add client flags options.
+
 	_ = flagSet.Parse(os.Args[2:])
 
 	if flagSet.NArg() == 0 {
