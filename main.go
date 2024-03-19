@@ -292,6 +292,11 @@ func daemon(flagSet *flag.FlagSet) error {
 	}
 	defer consoleClientsListener.Close()
 
+	err = os.Chmod(consoleSocketPath(vmName), 0o600)
+	if err != nil {
+		return fmt.Errorf("failed to chmod console clients unix socket - %w", err)
+	}
+
 	log.Println("setting up console daemon...")
 
 	// TODO: Need a way to send sigterm to child.
