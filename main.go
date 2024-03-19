@@ -449,7 +449,7 @@ func consoleDaemon(flagSet *flag.FlagSet) error {
 	consoleStdin := hsio.NewWriteCloser()
 	consoleStdout := hsio.NewReadCloser()
 
-	passFdClient := passfd.NewClient(ctx, consoleFdsConn, []func(*os.File) error{
+	passfdClient := passfd.NewClient(ctx, consoleFdsConn, []func(*os.File) error{
 		passfd.WriteCloserUpdaterToRecvFn(consoleStdin),
 		passfd.ReadCloserUpdaterToRecvFn(consoleStdout),
 	})
@@ -464,9 +464,21 @@ func consoleDaemon(flagSet *flag.FlagSet) error {
 	// TODO: Can we provide a method / config field that does this?
 	go io.Copy(writerServer, consoleStdout)
 
+	select {
+	case <-ctx.Done():
+		err = ctx.Err()
+	case <-passfdClient.Done():
+		err = fmt.Errorf("passfd client exited - %w", passfdClient.Err())
+	case <-writerServer.Done():
+		err = fmt.Errorf("writerserver exited - %w", writerServer.Err())
+	}
+
+	cancelFn()
+
+	<-passfdClient.Done()
 	<-writerServer.Done()
 
-	return writerServer.Err()
+	return err
 }
 
 func power(flagSet *flag.FlagSet) error {
