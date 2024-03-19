@@ -17,7 +17,7 @@ import (
 // Typically, callers will set socketType to syscall.SOCK_STREAM
 // and protocol to 0.
 func SharableUnixSocketpair(socketType int, protocol int) (*net.UnixConn, *os.File, error) {
-	files, err := SocketpairFiles(syscall.AF_LOCAL, socketType, protocol)
+	files, err := SocketpairFiles(syscall.AF_UNIX, socketType, protocol)
 	if err != nil {
 		return nil, nil, fmt.Errorf("socketpair files failed - %w", err)
 	}
