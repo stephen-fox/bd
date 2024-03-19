@@ -30,6 +30,7 @@ import (
 	"gitlab.com/stephen-fox/bhyved/internal/lctx"
 	"gitlab.com/stephen-fox/bhyved/internal/passfd"
 	"gitlab.com/stephen-fox/bhyved/internal/writerserver"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -558,7 +559,6 @@ func power(flagSet *flag.FlagSet) error {
 	return nil
 }
 
-// TODO: Drop privs if running as root.
 func console(flagSet *flag.FlagSet) error {
 	// TODO: Re-add client flags options.
 
@@ -574,6 +574,31 @@ func console(flagSet *flag.FlagSet) error {
 	}
 	defer conn.Close()
 
+	if os.Getuid() == 0 {
+		runAsUID, runAsGID, err := lookupUser("nobody")
+		if err != nil {
+			return fmt.Errorf("failed to lookup nobody user - %w", err)
+		}
+
+		chrootDirPath := "/var/empty"
+		err = syscall.Chroot(chrootDirPath)
+		if err != nil {
+			return fmt.Errorf("failed to chroot to %q - %w",
+				chrootDirPath, err)
+		}
+
+		err = dropPrivsToUser(int(runAsUID), int(runAsGID))
+		if err != nil {
+			return fmt.Errorf("failed to drop privs to uid %d gid %d - %w",
+				runAsUID, runAsGID, err)
+		}
+	}
+
+	err = unix.CapEnter()
+	if err != nil {
+		return fmt.Errorf("failed to enter capability mode - %w", err)
+	}
+
 	errs := make(chan error, 2)
 
 	go func() {
@@ -587,6 +612,20 @@ func console(flagSet *flag.FlagSet) error {
 	}()
 
 	return <-errs
+}
+
+func dropPrivsToUser(uid int, gid int) error {
+	err := unix.Setresgid(gid, gid, gid)
+	if err != nil {
+		return fmt.Errorf("setresgid failed for gid %d - %w", gid, err)
+	}
+
+	err = unix.Setresuid(uid, uid, uid)
+	if err != nil {
+		return fmt.Errorf("setresuid failed for uid %d - %w", uid, err)
+	}
+
+	return nil
 }
 
 func consoleSocketPath(vmName string) string {
