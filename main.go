@@ -564,11 +564,12 @@ func console(flagSet *flag.FlagSet) error {
 
 	_ = flagSet.Parse(os.Args[2:])
 
-	if flagSet.NArg() == 0 {
+	vmName := flagSet.Arg(0)
+	if vmName == "" {
 		return errors.New("please specify a vm name as the first non-flag argument")
 	}
 
-	conn, err := net.Dial("unix", consoleSocketPath(flagSet.Arg(0)))
+	conn, err := net.Dial("unix", consoleSocketPath(vmName))
 	if err != nil {
 		return fmt.Errorf("failed to open console unix socket - %w", err)
 	}
