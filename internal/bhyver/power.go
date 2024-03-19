@@ -13,7 +13,7 @@ import (
 )
 
 // PowerStateRequestsHanlder handles clients accepted by listener until
-// the context is cancelled or the listener returns an error.
+// the context is canceled or the listener returns an error.
 func PowerStateRequestsHanlder(ctx context.Context, listener *lctx.ListenerCtx) <-chan PowerStateRequest {
 	requests := make(chan PowerStateRequest)
 
