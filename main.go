@@ -410,7 +410,7 @@ func lookupUser(username string) (uid uint32, gid uint32, err error) {
 		return 0, 0, fmt.Errorf("failed to parse gid - %w", err)
 	}
 
-	return uint32(uidI), uint32(gidI), err
+	return uint32(uidI), uint32(gidI), nil
 }
 
 // TODO: Use syslog or writer to stderr if parent is in foreground mode.
