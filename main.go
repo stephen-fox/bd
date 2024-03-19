@@ -31,6 +31,7 @@ import (
 	"gitlab.com/stephen-fox/bhyved/internal/passfd"
 	"gitlab.com/stephen-fox/bhyved/internal/writerserver"
 	"golang.org/x/sys/unix"
+	"golang.org/x/term"
 )
 
 const (
@@ -560,7 +561,7 @@ func power(flagSet *flag.FlagSet) error {
 }
 
 func console(flagSet *flag.FlagSet) error {
-	waitForSocketToClose := flagSet.Bool(
+	allowStdinToClose := flagSet.Bool(
 		"w",
 		false,
 		"Do not exit if stdin is closed (useful for writing to stdin in a shell,\n"+
@@ -604,6 +605,12 @@ func console(flagSet *flag.FlagSet) error {
 		}
 	}
 
+	previousTermState, err := term.MakeRaw(0)
+	if err != nil {
+		return fmt.Errorf("failed to put terminal into raw mode - %w", err)
+	}
+	defer term.Restore(0, previousTermState)
+
 	err = unix.CapEnter()
 	if err != nil {
 		return fmt.Errorf("failed to enter capability mode - %w", err)
@@ -622,9 +629,14 @@ func console(flagSet *flag.FlagSet) error {
 	errs := make(chan error, 2)
 
 	go func() {
-		_, err := io.Copy(conn, os.Stdin)
-		if !*waitForSocketToClose {
+		err := copyStdinToConsole(conn)
+		if err != nil {
 			errs <- err
+			return
+		}
+
+		if !*allowStdinToClose {
+			errs <- nil
 		}
 	}()
 
@@ -633,7 +645,17 @@ func console(flagSet *flag.FlagSet) error {
 		errs <- err
 	}()
 
-	return <-errs
+	// I prefer seeing the exact reason compared to "context canceled".
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTERM)
+	defer signal.Stop(signals)
+
+	select {
+	case s := <-signals:
+		return fmt.Errorf("received signal: %s / %d", s.String(), s)
+	case err = <-errs:
+		return err
+	}
 }
 
 func dropPrivsToUser(uid int, gid int) error {
@@ -648,6 +670,53 @@ func dropPrivsToUser(uid int, gid int) error {
 	}
 
 	return nil
+}
+
+func copyStdinToConsole(conn io.Writer) error {
+	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Split(bufio.ScanBytes)
+
+	// From logging: 0xd 0d 7e 2e
+	// \n~.
+	// Apparently, \n is 0x09.
+	const stopTerminalEscSeq uint32 = 0x0d_7e_2e_00
+	const startOfEscSeq uint32 = 0x0d_7e_00_00
+
+	var lastFourBytes uint32
+	var escSeqStarted bool
+
+	for scanner.Scan() {
+		b := scanner.Bytes()[0]
+
+		// 0xaa41bb42 becomes 0x41bb4200.
+		lastFourBytes <<= 8
+		// 0x41bb4200 becomes 0x41bb42ff where ff is the new byte.
+		lastFourBytes |= uint32(b)
+
+		switch {
+		case (lastFourBytes<<16)^startOfEscSeq == 0:
+			// Do not send the "~" until the user sends the next byte.
+			escSeqStarted = true
+			continue
+		case (lastFourBytes<<8)^stopTerminalEscSeq == 0:
+			return nil
+		case escSeqStarted:
+			// The next byte was not ".", send "~".
+			escSeqStarted = false
+
+			_, err := conn.Write([]byte{0x7e})
+			if err != nil {
+				return fmt.Errorf("failed to write to conn - %w", err)
+			}
+		}
+
+		_, err := conn.Write(scanner.Bytes())
+		if err != nil {
+			return fmt.Errorf("failed to write to conn - %w", err)
+		}
+	}
+
+	return scanner.Err()
 }
 
 func consoleSocketPath(vmName string) string {
