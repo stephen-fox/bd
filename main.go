@@ -560,7 +560,16 @@ func power(flagSet *flag.FlagSet) error {
 }
 
 func console(flagSet *flag.FlagSet) error {
-	// TODO: Re-add client flags options.
+	waitForSocketToClose := flagSet.Bool(
+		"w",
+		false,
+		"Do not exit if stdin is closed (useful for writing to stdin in a shell,\n"+
+			"closing it, and waiting until the daemon shuts down)")
+
+	noBufferedOutput := flagSet.Bool(
+		"q",
+		false,
+		"Do not retrieve buffered output from daemon's child process")
 
 	_ = flagSet.Parse(os.Args[2:])
 
@@ -600,15 +609,27 @@ func console(flagSet *flag.FlagSet) error {
 		return fmt.Errorf("failed to enter capability mode - %w", err)
 	}
 
+	var clientFlags byte
+	if !*noBufferedOutput {
+		clientFlags |= writerserver.BufferedOutputClientFlag
+	}
+
+	_, err = conn.Write([]byte{clientFlags})
+	if err != nil {
+		return fmt.Errorf("failed to write client flags to socket - %w", err)
+	}
+
 	errs := make(chan error, 2)
 
 	go func() {
-		_, err := io.Copy(os.Stdout, conn)
-		errs <- err
+		_, err := io.Copy(conn, os.Stdin)
+		if !*waitForSocketToClose {
+			errs <- err
+		}
 	}()
 
 	go func() {
-		_, err := io.Copy(conn, os.Stdin)
+		_, err := io.Copy(os.Stdout, conn)
 		errs <- err
 	}()
 
