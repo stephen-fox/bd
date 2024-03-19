@@ -554,7 +554,7 @@ func powerStateSocketPath(vmName string) string {
 }
 
 func dataDirPath(vmName string) string {
-	return filepath.Join("/var", vmName)
+	return filepath.Join("/var", appName, vmName)
 }
 
 type fileModeFlag struct {
