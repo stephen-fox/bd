@@ -312,6 +312,8 @@ func daemon(flagSet *flag.FlagSet) error {
 	log.Println("setting up console daemon...")
 
 	// TODO: Need a way to send sigterm to child.
+	// TODO: Do not shutdown console daemon on context cancel
+	// until bhyve has exited.
 	consoleFdsSocket, err := execConsoleDaemon(
 		ctx,
 		consoleDaemonLog,
@@ -323,6 +325,7 @@ func daemon(flagSet *flag.FlagSet) error {
 
 	log.Println("console daemon started successfully")
 
+	// TOOD: Send bhyve stderr to syslog.
 	runner := bhyver.NewRunner(vmName, flagSet.Args(), powerStateRequests, consoleFdsSocket)
 
 	return runner.Loop(ctx)
