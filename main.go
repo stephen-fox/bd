@@ -3,6 +3,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -260,6 +261,15 @@ func daemon(flagSet *flag.FlagSet) error {
 		return fmt.Errorf("failed to create vm data directory path - %w", err)
 	}
 
+	consoleDaemonLog, err := os.OpenFile(
+		filepath.Join(vmDirPath, "console-daemon.log"),
+		os.O_CREATE|os.O_TRUNC|os.O_WRONLY,
+		0o600)
+	if err != nil {
+		return fmt.Errorf("failed to open console daemon log file - %w", err)
+	}
+	defer consoleDaemonLog.Close()
+
 	// TODO: Should we truncate the log?
 	consoleOutputLog, err := os.OpenFile(
 		filepath.Join(vmDirPath, "console-output.log"),
@@ -300,7 +310,11 @@ func daemon(flagSet *flag.FlagSet) error {
 	log.Println("setting up console daemon...")
 
 	// TODO: Need a way to send sigterm to child.
-	consoleFdsSocket, err := execConsoleDaemon(ctx, consoleOutputLog, consoleClientsListener)
+	consoleFdsSocket, err := execConsoleDaemon(
+		ctx,
+		consoleDaemonLog,
+		consoleOutputLog,
+		consoleClientsListener)
 	if err != nil {
 		return fmt.Errorf("failed to start console daemon - %w", err)
 	}
@@ -312,7 +326,10 @@ func daemon(flagSet *flag.FlagSet) error {
 	return runner.Loop(ctx)
 }
 
-func execConsoleDaemon(ctx context.Context, consoleLog *os.File, consoleClients net.Listener) (*net.UnixConn, error) {
+func execConsoleDaemon(ctx context.Context, daemongLog *os.File, consoleLog *os.File, consoleClients net.Listener) (*net.UnixConn, error) {
+	defer daemongLog.Close()
+	defer consoleLog.Close()
+
 	runAsUID, runAsGID, err := lookupUser("nobody")
 	if err != nil {
 		return nil, fmt.Errorf("failed to lookup run as user - %w", err)
@@ -340,6 +357,23 @@ func execConsoleDaemon(ctx context.Context, consoleLog *os.File, consoleClients 
 
 	consoleDaemon := exec.CommandContext(ctx, os.Args[0], "console-daemon")
 
+	stdoutPipe, err := consoleDaemon.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create stdout pipe - %w", err)
+	}
+	defer stdoutPipe.Close()
+
+	stderrPipe, err := consoleDaemon.StderrPipe()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create stderr pipe - %w", err)
+	}
+	defer stderrPipe.Close()
+
+	stderr := bytes.NewBuffer(nil)
+	go io.Copy(stderr, stderrPipe)
+
+	consoleDaemon.Env = []string{}
+
 	consoleDaemon.SysProcAttr = &syscall.SysProcAttr{
 		Credential: &syscall.Credential{
 			Uid: runAsUID,
@@ -348,27 +382,21 @@ func execConsoleDaemon(ctx context.Context, consoleLog *os.File, consoleClients 
 	}
 
 	consoleDaemon.ExtraFiles = []*os.File{
+		daemongLog,
 		consoleLog,
 		clientsListener,
 		theirConsoleFdSocket,
 	}
 
-	stdout, err := consoleDaemon.StdoutPipe()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create stdout pipe - %w", err)
-	}
-	defer stdout.Close()
-
 	err = consoleDaemon.Start()
 	if err != nil {
 		return nil, fmt.Errorf("failed to start child process - %w", err)
 	}
-	defer consoleLog.Close()
 
 	gotWrite := make(chan error, 1)
 
 	go func() {
-		_, err := stdout.Read(make([]byte, 1))
+		_, err := stdoutPipe.Read(make([]byte, 1))
 		gotWrite <- err
 	}()
 
@@ -386,8 +414,10 @@ func execConsoleDaemon(ctx context.Context, consoleLog *os.File, consoleClients 
 	case err = <-gotWrite:
 		if err != nil {
 			_ = consoleDaemon.Process.Kill()
+			_ = stderrPipe.Close() // Ensures stderr buffer writes are done.
 
-			return nil, fmt.Errorf("failed to receive ready write from child - %w", err)
+			return nil, fmt.Errorf("failed to receive ready write from child - %w - stderr: %s",
+				err, stderr.String())
 		}
 
 		return ourConsoleFdSocket, nil
@@ -413,7 +443,6 @@ func lookupUser(username string) (uid uint32, gid uint32, err error) {
 	return uint32(uidI), uint32(gidI), nil
 }
 
-// TODO: Use syslog or writer to stderr if parent is in foreground mode.
 func consoleDaemon(flagSet *flag.FlagSet) error {
 	_ = flagSet.Parse(os.Args[2:])
 
@@ -421,21 +450,23 @@ func consoleDaemon(flagSet *flag.FlagSet) error {
 		syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 	defer cancelFn()
 
-	// fd 3 should be the console log file.
-	consoleLogFile := os.NewFile(3, "")
-	if consoleLogFile == nil {
-		return errors.New("os newfile returned nil for the console log file - invalid fd")
+	daemonLogFile := os.NewFile(3, "")
+	if daemonLogFile == nil {
+		return errors.New("os new file returned nil for the daemon log file - invalid fd")
 	}
 
-	// fd 4 should be a listener.
-	consoleClientsListener, err := lctx.FromFileDescriptor(ctx, 4, "")
+	consoleLogFile := os.NewFile(4, "")
+	if consoleLogFile == nil {
+		return errors.New("os new file returned nil for the console log file - invalid fd")
+	}
+
+	consoleClientsListener, err := lctx.FromFileDescriptor(ctx, 5, "")
 	if err != nil {
 		return fmt.Errorf("failed to convert console clients fd to a listener - %w", err)
 	}
 	defer consoleClientsListener.Close()
 
-	// fd 5 should be a unix socket.
-	consoleFdsConn, err := passfd.UnixConnFromFd(5, "")
+	consoleFdsConn, err := passfd.UnixConnFromFd(6, "")
 	if err != nil {
 		return fmt.Errorf("failed to convert console sharing fd to a unix conn - %w", err)
 	}
@@ -443,8 +474,11 @@ func consoleDaemon(flagSet *flag.FlagSet) error {
 
 	_, err = os.Stdout.Write([]byte{0x41})
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to write ready message to stdout - %w", err)
 	}
+
+	log.SetFlags(log.LstdFlags)
+	log.SetOutput(daemonLogFile)
 
 	consoleStdin := hsio.NewWriteCloser()
 	consoleStdout := hsio.NewReadCloser()
