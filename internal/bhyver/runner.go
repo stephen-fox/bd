@@ -235,7 +235,7 @@ func (o *Runner) acpiOffOrKill(ctx context.Context) error {
 	// Trigger ACPI poweroff, refer to "man bhyve" for more info.
 	err := o.execCmd.Process.Signal(syscall.SIGTERM)
 	if err != nil {
-		log.Printf("failed to send sigterm to bhyve - %s", err)
+		log.Printf("[warn] failed to send sigterm to bhyve - %s", err)
 	}
 
 	select {
@@ -251,7 +251,7 @@ func (o *Runner) acpiOffOrKill(ctx context.Context) error {
 
 		err = o.bhyvectl(ctx, "--destroy")
 		if err != nil {
-			log.Printf("failed to destroy vm after stopping it - %s", err)
+			log.Printf("[warn] failed to destroy vm after stopping it - %s", err)
 		}
 
 		return nil
