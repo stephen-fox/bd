@@ -65,13 +65,13 @@ func ListenUnixPath(ctx context.Context, filePath string, perm os.FileMode) (*Li
 func FromFileDescriptor(ctx context.Context, fd uintptr, optName string) (*ListenerCtx, error) {
 	file := os.NewFile(fd, optName)
 	if file == nil {
-		return nil, fmt.Errorf("os newfile returned a nil file for fd %d - invalid file descriptor", fd)
+		return nil, fmt.Errorf("os new file returned a nil file for fd %d - invalid file descriptor", fd)
 	}
 	defer file.Close()
 
 	listener, err := net.FileListener(file)
 	if err != nil {
-		return nil, fmt.Errorf("net filelistener failed - %w", err)
+		return nil, fmt.Errorf("net file listener failed - %w", err)
 	}
 
 	return FromNetListener(ctx, listener), nil
@@ -96,7 +96,7 @@ func FromNetListener(ctx context.Context, listener net.Listener) *ListenerCtx {
 // and providing newly-accepted net.Conn objects using a channel.
 //
 // Both it and the inner net.Listener can be shutdown by calling
-// the Close method or by cancelling the parent context.Context.
+// the Close method or by canceling the parent context.Context.
 type ListenerCtx struct {
 	listener net.Listener
 	conns    chan net.Conn
