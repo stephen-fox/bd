@@ -158,8 +158,8 @@ func daemon(flagSet *flag.FlagSet) error {
 
 	pidFilePath := flagSet.String(
 		"p",
-		"",
-		"Optionally create a PID file at this file path")
+		"/var/run/"+appName+".pid",
+		"Create a PID file at this file path (specify '-' to disable)")
 
 	_ = flagSet.Parse(os.Args[2:])
 
@@ -222,13 +222,13 @@ func daemon(flagSet *flag.FlagSet) error {
 			return fmt.Errorf("failed to exec to background - %w", err)
 		}
 
-		if *pidFilePath != "" {
+		if *pidFilePath != "-" {
 			_ = os.Remove(*pidFilePath)
 
 			err = os.WriteFile(
 				*pidFilePath,
 				[]byte(fmt.Sprintf("%d\n", restarted.Process.Pid)),
-				0644)
+				0o644)
 			if err != nil {
 				_ = restarted.Process.Kill()
 				return fmt.Errorf("failed to write pid file '%s' - %w",
