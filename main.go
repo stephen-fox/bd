@@ -166,7 +166,7 @@ func daemon(flagSet *flag.FlagSet) error {
 	pidFilePath := flagSet.String(
 		"p",
 		"/var/run/"+appName+".pid",
-		"Create a PID file at this file path (specify '-' to disable)")
+		"Create a PID file at this file path (specify '-' to disable)\n")
 
 	_ = flagSet.Parse(os.Args[2:])
 
