@@ -16,11 +16,11 @@ import (
 )
 
 // NewRunner instantiates a Runner.
-func NewRunner(vmName string, bhyveArgs []string, powerRequests <-chan PowerStateRequest, consoleFds *net.UnixConn) *Runner {
+func NewRunner(vmName string, bhyveArgs []string, powerRequests <-chan PowerStateRequest, optConsoleFdsSocket *net.UnixConn) *Runner {
 	return &Runner{
 		vmName:    vmName,
 		bhyveArgs: bhyveArgs,
-		consoled:  consoleFds,
+		consoled:  optConsoleFdsSocket,
 		powerReqs: powerRequests,
 		exited:    make(chan error, 1),
 		stderr:    bytes.NewBuffer(nil),
@@ -175,38 +175,37 @@ func (o *Runner) start(ctx context.Context) error {
 
 	bhyve.Stderr = o.stderr
 
-	stdin, err := bhyve.StdinPipe()
-	if err != nil {
-		return fmt.Errorf("failed to create stdin pipe - %w", err)
-	}
+	if o.consoled != nil {
+		stdin, err := bhyve.StdinPipe()
+		if err != nil {
+			return fmt.Errorf("failed to create stdin pipe - %w", err)
+		}
 
-	stdinFile, ok := stdin.(*os.File)
-	if !ok {
-		return fmt.Errorf("expected stdin pipe to be *os.File - got %T", stdin)
-	}
+		stdinFile, ok := stdin.(*os.File)
+		if !ok {
+			return fmt.Errorf("expected stdin pipe to be *os.File - got %T", stdin)
+		}
 
-	stdout, err := bhyve.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("failed to create stdout pipe - %w", err)
-	}
+		stdout, err := bhyve.StdoutPipe()
+		if err != nil {
+			return fmt.Errorf("failed to create stdout pipe - %w", err)
+		}
 
-	stdoutFile, ok := stdout.(*os.File)
-	if !ok {
-		return fmt.Errorf("expected stdout pipe to be *os.File - got %T", stdin)
-	}
+		stdoutFile, ok := stdout.(*os.File)
+		if !ok {
+			return fmt.Errorf("expected stdout pipe to be *os.File - got %T", stdin)
+		}
 
-	err = passfd.Put(o.consoled, stdinFile, stdoutFile)
-	if err != nil {
-		return fmt.Errorf("failed to send console fds to console daemon - %w", err)
+		err = passfd.Put(o.consoled, stdinFile, stdoutFile)
+		if err != nil {
+			return fmt.Errorf("failed to send console fds to console daemon - %w", err)
+		}
 	}
 
 	log.Printf("exec'ing bhyve with argv: %q...", bhyve.String())
 
-	err = bhyve.Start()
+	err := bhyve.Start()
 	if err != nil {
-		_ = stdin.Close()
-		_ = stdout.Close()
-
 		return fmt.Errorf("failed to start bhyve - %w", err)
 	}
 

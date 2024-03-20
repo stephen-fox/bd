@@ -146,6 +146,13 @@ func daemon(flagSet *flag.FlagSet) error {
 		false,
 		"Stay in the foreground rather than exec'ing into background")
 
+	enableConsoleDaemon := flagSet.Bool(
+		"C",
+		false,
+		"Enable serial console access using the 'console' mode\n"+
+			"(requires that bhyve use the serial console 'stdio' mode - e.g.,\n"+
+			"'-s 31,lpc -l com1,stdio')")
+
 	startSyslogd := flagSet.Bool(
 		"s",
 		false,
@@ -279,21 +286,23 @@ func daemon(flagSet *flag.FlagSet) error {
 
 	powerStateRequests := bhyver.PowerStateRequestsHanlder(ctx, powerStateListener)
 
-	log.Println("setting up console daemon...")
+	var optConsoleFdsSocket *net.UnixConn
+	if *enableConsoleDaemon {
+		log.Println("setting up console daemon...")
 
-	// TODO: Make serial console optional.
-	// TODO: Need a way to send sigterm to child.
-	// TODO: Do not shutdown console daemon on context cancel
-	// until bhyve has exited.
-	consoleFdsSocket, err := execConsoleDaemon(ctx, vmDirPath)
-	if err != nil {
-		return fmt.Errorf("failed to start console daemon - %w", err)
+		// TODO: Need a way to send sigterm to child.
+		// TODO: Do not shutdown console daemon on context cancel
+		// until bhyve has exited.
+		optConsoleFdsSocket, err = execConsoleDaemon(ctx, vmDirPath)
+		if err != nil {
+			return fmt.Errorf("failed to start console daemon - %w", err)
+		}
+
+		log.Println("console daemon started successfully")
 	}
 
-	log.Println("console daemon started successfully")
-
 	// TOOD: Send bhyve stderr to syslog.
-	runner := bhyver.NewRunner(vmName, flagSet.Args(), powerStateRequests, consoleFdsSocket)
+	runner := bhyver.NewRunner(vmName, flagSet.Args(), powerStateRequests, optConsoleFdsSocket)
 
 	return runner.Loop(ctx)
 }
