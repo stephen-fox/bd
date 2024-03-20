@@ -541,14 +541,11 @@ func consoleDaemon(flagSet *flag.FlagSet) error {
 	})
 
 	writerServer := writerserver.New(ctx, writerserver.Config{
-		Listener: consoleClientsListener,
-		// TODO: Maybe a ClientSrc field?
+		Listener:   consoleClientsListener,
+		Source:     consoleStdout,
 		ClientDest: consoleStdin,
 		OptLogFile: consoleLogFile,
 	})
-
-	// TODO: Can we provide a method / config field that does this?
-	go io.Copy(writerServer, consoleStdout)
 
 	select {
 	case <-ctx.Done():

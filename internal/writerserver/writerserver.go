@@ -28,18 +28,21 @@ type Config struct {
 	// Listener is the ListenerCtx to listen for connections on.
 	Listener ListenerCtx
 
+	Source io.ReadCloser
+
 	// ClientDest is the io.Writer to send client writes to.
-	ClientDest io.Writer
+	ClientDest io.WriteCloser
 
 	// OptLogFile is an optional log to write console output to.
 	OptLogFile io.Writer
 }
 
-// New instantiates a Server.
+// New instantiates a Server and starts it.
 func New(ctx context.Context, config Config) *Server {
 	server := &Server{
 		config:    config,
 		toClients: make(chan writeEvent),
+		readDone:  make(chan error, 1),
 		close:     make(chan struct{}),
 		done:      make(chan struct{}),
 	}
@@ -55,6 +58,7 @@ func New(ctx context.Context, config Config) *Server {
 type Server struct {
 	config    Config
 	toClients chan writeEvent
+	readDone  chan error
 	close     chan struct{}
 	done      chan struct{}
 	err       error
@@ -82,31 +86,13 @@ func (o *Server) Close() error {
 	}
 }
 
-// Write writes the provided []byte to a buffer and any existing clients.
-func (o *Server) Write(b []byte) (int, error) {
-	cb := make(chan writeEventResult, 1)
-
-	select {
-	case <-o.done:
-		return 0, o.err
-	case o.toClients <- writeEvent{
-		b:  b,
-		cb: cb,
-	}:
-	}
-
-	select {
-	case <-o.done:
-		return 0, o.err
-	case result := <-cb:
-		return result.n, result.err
-	}
-}
-
 func (o *Server) loop(ctx context.Context) {
 	currentConns := make(map[net.Conn]struct{})
 
 	defer func() {
+		o.config.ClientDest.Close()
+		o.config.Source.Close()
+
 		if o.err == nil {
 			o.err = errors.New("unknown error")
 		}
@@ -126,6 +112,11 @@ func (o *Server) loop(ctx context.Context) {
 		close(o.done)
 	}()
 
+	go func() {
+		_, err := io.Copy(&writer{server: o}, o.config.Source)
+		o.readDone <- err
+	}()
+
 	closeConns := make(chan net.Conn)
 
 	fromProxBufMaxBytes := 1024
@@ -141,6 +132,13 @@ loop:
 		return
 	case <-o.config.Listener.Done():
 		o.err = fmt.Errorf("listener is done - %w", o.config.Listener.Err())
+		return
+	case err := <-o.readDone:
+		if err != nil {
+			o.err = fmt.Errorf("failed to read from reader - %w", err)
+		} else {
+			o.err = errors.New("read exited unexpectedly without error")
+		}
 		return
 	case conn := <-o.config.Listener.Conns():
 		setDeadLineErr := conn.SetReadDeadline(time.Now().Add(time.Second))
@@ -187,6 +185,8 @@ loop:
 			err: err,
 		}
 
+		// TODO: Make buffering configurable.
+		// TODO: Always do buffering if it is enabled.
 		if len(currentConns) == 0 {
 			fromProcBuf.Write(write.b)
 
@@ -207,6 +207,34 @@ loop:
 	}
 
 	goto loop
+}
+
+type writer struct {
+	server *Server
+}
+
+func (o *writer) Write(b []byte) (int, error) {
+	return o.server.write(b)
+}
+
+func (o *Server) write(b []byte) (int, error) {
+	cb := make(chan writeEventResult, 1)
+
+	select {
+	case <-o.done:
+		return 0, o.err
+	case o.toClients <- writeEvent{
+		b:  b,
+		cb: cb,
+	}:
+	}
+
+	select {
+	case <-o.done:
+		return 0, o.err
+	case result := <-cb:
+		return result.n, result.err
+	}
 }
 
 // TODO: Refactor to use pointers and "ready" channel
