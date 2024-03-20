@@ -323,7 +323,7 @@ func (o *Runner) bhyvectlDestroyLastDitch(timeout time.Duration, scenario string
 
 	err := o.bhyvectl(ctx, "--destroy")
 	if err != nil {
-		log.Printf("[warn] failed to destroy vm device - %w", err)
+		log.Printf("[warn] failed to destroy vm device - %s", err)
 		return
 	}
 
