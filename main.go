@@ -11,6 +11,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"log/syslog"
 	"net"
@@ -50,6 +51,9 @@ DESCRIPTION
 
 OPTIONS
 `
+
+	vmRuntimeDirPerm = fs.FileMode(0o755)
+	vmSocketsPerm    = fs.FileMode(0o660)
 )
 
 func main() {
@@ -141,14 +145,6 @@ func daemon(flagSet *flag.FlagSet) error {
 		"F",
 		false,
 		"Stay in the foreground rather than exec'ing into background")
-
-	socketMode := fileModeFlag{
-		mode: 0600,
-	}
-	flagSet.Var(
-		&socketMode,
-		"m",
-		"The socket's file mode")
 
 	startSyslogd := flagSet.Bool(
 		"s",
@@ -256,31 +252,17 @@ func daemon(flagSet *flag.FlagSet) error {
 		log.SetOutput(syslogWriter)
 	}
 
-	vmDirPath := dataDirPath(vmName)
+	vmDirPath := vmRuntimeDirPath(vmName)
 
-	err = os.MkdirAll(vmDirPath, 0o755)
+	err = os.MkdirAll(vmDirPath, vmRuntimeDirPerm)
 	if err != nil {
-		return fmt.Errorf("failed to create vm data directory path - %w", err)
+		return fmt.Errorf("failed to create vm dir path - %w", err)
 	}
 
-	consoleDaemonLog, err := os.OpenFile(
-		filepath.Join(vmDirPath, "console-daemon.log"),
-		os.O_CREATE|os.O_TRUNC|os.O_WRONLY,
-		0o600)
+	err = os.Chmod(vmDirPath, vmRuntimeDirPerm)
 	if err != nil {
-		return fmt.Errorf("failed to open console daemon log file - %w", err)
+		return fmt.Errorf("failed to chmod vm dir path %q - %w", vmDirPath, err)
 	}
-	defer consoleDaemonLog.Close()
-
-	// TODO: Should we truncate the log?
-	consoleOutputLog, err := os.OpenFile(
-		filepath.Join(vmDirPath, "console-output.log"),
-		os.O_CREATE|os.O_TRUNC|os.O_WRONLY,
-		0o600)
-	if err != nil {
-		return fmt.Errorf("failed to open vm console output log file - %w", err)
-	}
-	defer consoleOutputLog.Close()
 
 	ctx, cancelFn := signal.NotifyContext(context.Background(),
 		syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTERM)
@@ -288,8 +270,8 @@ func daemon(flagSet *flag.FlagSet) error {
 
 	powerStateListener, err := lctx.ListenUnixPath(
 		ctx,
-		powerStateSocketPath(vmName),
-		socketMode.mode)
+		powerStateSocketPath(vmDirPath),
+		vmSocketsPerm)
 	if err != nil {
 		return fmt.Errorf("failed to create power state unix socket - %w", err)
 	}
@@ -297,28 +279,13 @@ func daemon(flagSet *flag.FlagSet) error {
 
 	powerStateRequests := bhyver.PowerStateRequestsHanlder(ctx, powerStateListener)
 
-	// TODO: Make serial console optional.
-	consoleClientsListener, err := net.Listen("unix", consoleSocketPath(vmName))
-	if err != nil {
-		return fmt.Errorf("failed to create console clients unix socket - %w", err)
-	}
-	defer consoleClientsListener.Close()
-
-	err = os.Chmod(consoleSocketPath(vmName), 0o600)
-	if err != nil {
-		return fmt.Errorf("failed to chmod console clients unix socket - %w", err)
-	}
-
 	log.Println("setting up console daemon...")
 
+	// TODO: Make serial console optional.
 	// TODO: Need a way to send sigterm to child.
 	// TODO: Do not shutdown console daemon on context cancel
 	// until bhyve has exited.
-	consoleFdsSocket, err := execConsoleDaemon(
-		ctx,
-		consoleDaemonLog,
-		consoleOutputLog,
-		consoleClientsListener)
+	consoleFdsSocket, err := execConsoleDaemon(ctx, vmDirPath)
 	if err != nil {
 		return fmt.Errorf("failed to start console daemon - %w", err)
 	}
@@ -331,25 +298,37 @@ func daemon(flagSet *flag.FlagSet) error {
 	return runner.Loop(ctx)
 }
 
-func execConsoleDaemon(ctx context.Context, daemongLog *os.File, consoleLog *os.File, consoleClients net.Listener) (*net.UnixConn, error) {
-	defer daemongLog.Close()
-	defer consoleLog.Close()
-
+func execConsoleDaemon(ctx context.Context, vmDirPath string) (*net.UnixConn, error) {
 	runAsUID, runAsGID, err := lookupUser("nobody")
 	if err != nil {
 		return nil, fmt.Errorf("failed to lookup run as user - %w", err)
 	}
 
-	clientsUnixListener, ok := consoleClients.(*net.UnixListener)
-	if !ok {
-		return nil, fmt.Errorf("expected consoleClients to be *net.UnixListener - got %T",
-			consoleClients)
-	}
-
-	clientsListener, err := clientsUnixListener.File()
+	daemonLog, err := os.OpenFile(
+		filepath.Join(vmDirPath, "console-daemon.log"),
+		os.O_CREATE|os.O_TRUNC|os.O_WRONLY,
+		0o600)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get file descriptor for console clients listener - %w",
-			err)
+		return nil, fmt.Errorf("failed to open console daemon log file - %w", err)
+	}
+	defer daemonLog.Close()
+
+	// TODO: Should we truncate the log?
+	consoleLog, err := os.OpenFile(
+		filepath.Join(vmDirPath, "console-output.log"),
+		os.O_CREATE|os.O_TRUNC|os.O_WRONLY,
+		0o600)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open vm console output log file - %w", err)
+	}
+	defer consoleLog.Close()
+
+	_, clientsListener, err := lctx.ListenSharableUnixPath(
+		ctx,
+		consoleSocketPath(vmDirPath),
+		vmSocketsPerm)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create console client unix socket - %w", err)
 	}
 	defer clientsListener.Close()
 
@@ -387,7 +366,7 @@ func execConsoleDaemon(ctx context.Context, daemongLog *os.File, consoleLog *os.
 	}
 
 	consoleDaemon.ExtraFiles = []*os.File{
-		daemongLog,
+		daemonLog,
 		consoleLog,
 		clientsListener,
 		theirConsoleFdSocket,
@@ -528,6 +507,8 @@ func power(flagSet *flag.FlagSet) error {
 		return errors.New("please specify a vm name as the first non-flag argument")
 	}
 
+	vmDirPath := vmRuntimeDirPath(vmName)
+
 	powerStateStr := flagSet.Arg(1)
 	if powerStateStr == "" {
 		return errors.New("please specify a power state as the last non-flag argument")
@@ -538,7 +519,7 @@ func power(flagSet *flag.FlagSet) error {
 		return fmt.Errorf("unknown power state type: %q", powerStateStr)
 	}
 
-	conn, err := net.Dial("unix", powerStateSocketPath(vmName))
+	conn, err := net.Dial("unix", powerStateSocketPath(vmDirPath))
 	if err != nil {
 		return fmt.Errorf("failed to open power state unix socket - %w", err)
 	}
@@ -582,7 +563,9 @@ func console(flagSet *flag.FlagSet) error {
 		return errors.New("please specify a vm name as the first non-flag argument")
 	}
 
-	conn, err := net.Dial("unix", consoleSocketPath(vmName))
+	vmDirPath := vmRuntimeDirPath(vmName)
+
+	conn, err := net.Dial("unix", consoleSocketPath(vmDirPath))
 	if err != nil {
 		return fmt.Errorf("failed to open console unix socket - %w", err)
 	}
@@ -722,15 +705,15 @@ func copyStdinToConsole(conn io.Writer) error {
 	return scanner.Err()
 }
 
-func consoleSocketPath(vmName string) string {
-	return filepath.Join(dataDirPath(vmName), "console.sock")
+func consoleSocketPath(runtimeDirPath string) string {
+	return filepath.Join(runtimeDirPath, "console.sock")
 }
 
-func powerStateSocketPath(vmName string) string {
-	return filepath.Join(dataDirPath(vmName), "power.sock")
+func powerStateSocketPath(runtimeDirPath string) string {
+	return filepath.Join(runtimeDirPath, "power.sock")
 }
 
-func dataDirPath(vmName string) string {
+func vmRuntimeDirPath(vmName string) string {
 	return filepath.Join("/var", appName, vmName)
 }
 
