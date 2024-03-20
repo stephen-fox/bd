@@ -321,7 +321,7 @@ func (o *Runner) bhyvectlDestroyLastDitch(timeout time.Duration, scenario string
 	ctx, cancelFn := context.WithTimeout(context.Background(), timeout)
 	defer cancelFn()
 
-	err := o.bhyvectl(ctx, "--destroy")
+	err := o.bhyvectlDestroy(ctx)
 	if err != nil {
 		log.Printf("[warn] failed to destroy vm device - %s", err)
 		return
