@@ -16,16 +16,21 @@ import (
 	"gitlab.com/stephen-fox/bhyved/internal/passfd"
 )
 
-// NewRunner instantiates a Runner.
-func NewRunner(vmName string, bhyveArgs []string, powerRequests <-chan PowerStateRequest, optConsoleFdsSocket *net.UnixConn) *Runner {
-	return &Runner{
+// StartRunner instantiates a Runner and starts it.
+func StartRunner(ctx context.Context, vmName string, bhyveArgs []string, powerRequests <-chan PowerStateRequest, optConsoleFdConn *net.UnixConn) *Runner {
+	runner := &Runner{
 		vmName:    vmName,
 		bhyveArgs: bhyveArgs,
-		consoled:  optConsoleFdsSocket,
+		consoled:  optConsoleFdConn,
 		powerReqs: powerRequests,
 		exited:    make(chan error, 1),
 		stderr:    bytes.NewBuffer(nil),
+		done:      make(chan struct{}),
 	}
+
+	go runner.loop(ctx)
+
+	return runner
 }
 
 // Runner operates a bhyve process.
@@ -37,10 +42,31 @@ type Runner struct {
 	exited    chan error
 	execCmd   *exec.Cmd
 	stderr    *bytes.Buffer
+	done      chan struct{}
+	err       error
 }
 
-// Loop starts the Runner. It blocks until an error occurs.
-func (o *Runner) Loop(ctx context.Context) error {
+func (o *Runner) Done() <-chan struct{} {
+	return o.done
+}
+
+func (o *Runner) Err() error {
+	return o.err
+}
+
+func (o *Runner) loop(ctx context.Context) {
+	defer close(o.done)
+
+	// Ensure any child go routines are killed if
+	// an error occurs.
+	var cancelFn func()
+	ctx, cancelFn = context.WithCancel(ctx)
+	defer cancelFn()
+
+	o.err = o.loopWithError(ctx)
+}
+
+func (o *Runner) loopWithError(ctx context.Context) error {
 	err := o.start(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to start bhyve for the first time - %w", err)

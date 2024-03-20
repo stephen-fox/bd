@@ -286,28 +286,74 @@ func daemon(flagSet *flag.FlagSet) error {
 
 	powerStateRequests := bhyver.PowerStateRequestsHanlder(ctx, powerStateListener)
 
-	var optConsoleFdsSocket *net.UnixConn
+	var optConsoleDaemon *consoleDaemonChild
+	var optConsoleDaemonDone <-chan struct{}
+	var optConsoleDaemonConn *net.UnixConn
+
 	if *enableConsoleDaemon {
 		log.Println("setting up console daemon...")
 
-		// TODO: Need a way to send sigterm to child.
-		// TODO: Do not shutdown console daemon on context cancel
-		// until bhyve has exited.
-		optConsoleFdsSocket, err = execConsoleDaemon(ctx, vmDirPath)
+		optConsoleDaemon, err = execConsoleDaemon(ctx, vmDirPath)
 		if err != nil {
 			return fmt.Errorf("failed to start console daemon - %w", err)
 		}
+		defer optConsoleDaemon.Kill()
+
+		optConsoleDaemonDone = optConsoleDaemon.Done()
+		optConsoleDaemonConn = optConsoleDaemon.FdConn()
 
 		log.Println("console daemon started successfully")
 	}
 
 	// TOOD: Send bhyve stderr to syslog.
-	runner := bhyver.NewRunner(vmName, flagSet.Args(), powerStateRequests, optConsoleFdsSocket)
+	runner := bhyver.StartRunner(
+		ctx,
+		vmName,
+		flagSet.Args(),
+		powerStateRequests,
+		optConsoleDaemonConn)
 
-	return runner.Loop(ctx)
+	select {
+	case <-runner.Done():
+		return fmt.Errorf("bhyve runner exited - %w", runner.Err())
+	case <-optConsoleDaemonDone:
+		err = fmt.Errorf("console daemon exited unexpectedly - shutting down (err: %w)",
+			optConsoleDaemon.Err())
+
+		log.Println(err)
+
+		cancelFn()
+
+		<-runner.Done()
+
+		return err
+	}
 }
 
-func execConsoleDaemon(ctx context.Context, vmDirPath string) (*net.UnixConn, error) {
+type consoleDaemonChild struct {
+	fdsConn *net.UnixConn
+	execCmd *exec.Cmd
+	done    chan struct{}
+	err     error
+}
+
+func (o *consoleDaemonChild) Done() <-chan struct{} {
+	return o.done
+}
+
+func (o *consoleDaemonChild) Err() error {
+	return o.err
+}
+
+func (o *consoleDaemonChild) FdConn() *net.UnixConn {
+	return o.fdsConn
+}
+
+func (o *consoleDaemonChild) Kill() error {
+	return o.execCmd.Process.Kill()
+}
+
+func execConsoleDaemon(ctx context.Context, vmDirPath string) (*consoleDaemonChild, error) {
 	runAsUID, runAsGID, err := lookupUser("nobody")
 	if err != nil {
 		return nil, fmt.Errorf("failed to lookup run as user - %w", err)
@@ -348,7 +394,7 @@ func execConsoleDaemon(ctx context.Context, vmDirPath string) (*net.UnixConn, er
 	}
 	defer theirConsoleFdSocket.Close()
 
-	consoleDaemon := exec.CommandContext(ctx, os.Args[0], "console-daemon")
+	consoleDaemon := exec.Command(os.Args[0], "console-daemon")
 
 	stdoutPipe, err := consoleDaemon.StdoutPipe()
 	if err != nil {
@@ -372,6 +418,8 @@ func execConsoleDaemon(ctx context.Context, vmDirPath string) (*net.UnixConn, er
 			Uid: runAsUID,
 			Gid: runAsGID,
 		},
+		// Do not propogate signals sent to us to child.
+		Setpgid: true,
 	}
 
 	consoleDaemon.ExtraFiles = []*os.File{
@@ -413,7 +461,18 @@ func execConsoleDaemon(ctx context.Context, vmDirPath string) (*net.UnixConn, er
 				err, stderr.String())
 		}
 
-		return ourConsoleFdSocket, nil
+		child := &consoleDaemonChild{
+			fdsConn: ourConsoleFdSocket,
+			execCmd: consoleDaemon,
+			done:    make(chan struct{}),
+		}
+
+		go func() {
+			child.err = consoleDaemon.Wait()
+			close(child.done)
+		}()
+
+		return child, nil
 	}
 }
 
