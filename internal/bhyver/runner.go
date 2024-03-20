@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -44,6 +45,7 @@ func (o *Runner) Loop(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to start bhyve for the first time - %w", err)
 	}
+	defer o.bhyvectlDestroyLastDitch(5*time.Second, "runner exit")
 
 	for {
 		select {
@@ -151,8 +153,12 @@ func (o *Runner) start(ctx context.Context) error {
 
 	log.Println("starting bhyve...")
 
-	// TODO: Check if the VM exists first.
-	o.bhyvectl(ctx, "destroy")
+	if o.vmmDeviceExists() {
+		err := o.bhyvectlDestroy(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to destroy existing vm device on startup - %w", err)
+		}
+	}
 
 	o.stderr.Reset()
 
@@ -246,12 +252,9 @@ func (o *Runner) acpiOffOrKill(ctx context.Context) error {
 
 		return ctx.Err()
 	case err = <-o.exited:
-		log.Printf("bhyve process exited after sending sigterm - destroying vm with bhyvectl... (child err: %v)", err)
+		log.Printf("bhyve process exited after sending sigterm (child err: %v)", err)
 
-		err = o.bhyvectl(ctx, "--destroy")
-		if err != nil {
-			log.Printf("[warn] failed to destroy vm after stopping it - %s", err)
-		}
+		o.bhyvectlDestroyLastDitch(5*time.Second, "acpi power off")
 
 		return nil
 	}
@@ -263,17 +266,9 @@ func (o *Runner) pullPowerCable(ctx context.Context) error {
 
 		return nil
 	}
+	defer o.bhyvectlDestroyLastDitch(5*time.Second, "pull power cable")
 
 	log.Println("pulling power cable from bhyve...")
-
-	defer func() {
-		log.Println("destroying vm with bhyvectl...")
-
-		err := o.bhyvectl(ctx, "--destroy")
-		if err != nil {
-			log.Printf("failed to destroy vm after stopping it - %s", err)
-		}
-	}()
 
 	_ = o.execCmd.Process.Signal(syscall.SIGKILL)
 
@@ -288,6 +283,34 @@ func (o *Runner) pullPowerCable(ctx context.Context) error {
 
 		return nil
 	}
+}
+
+func (o *Runner) bhyvectlDestroyLastDitch(timeout time.Duration, scenario string) {
+	if !o.vmmDeviceExists() {
+		return
+	}
+
+	log.Printf("destroying existing vm device due to %q...", scenario)
+
+	ctx, cancelFn := context.WithTimeout(context.Background(), timeout)
+	defer cancelFn()
+
+	err := o.bhyvectl(ctx, "--destroy")
+	if err != nil {
+		log.Printf("[warn] failed to destroy vm device - %w", err)
+		return
+	}
+
+	log.Println("successfully destroyed vm device")
+}
+
+func (o *Runner) bhyvectlDestroy(ctx context.Context) error {
+	err := o.bhyvectl(ctx, "--destroy")
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (o *Runner) bhyvectl(ctx context.Context, arg string, args ...string) error {
@@ -309,6 +332,11 @@ func (o *Runner) bhyvectl(ctx context.Context, arg string, args ...string) error
 	}
 
 	return nil
+}
+
+func (o *Runner) vmmDeviceExists() bool {
+	_, statErr := os.Stat(filepath.Join("/dev/vmm", o.vmName))
+	return statErr == nil
 }
 
 func (o *Runner) isRunning() bool {
