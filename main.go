@@ -391,7 +391,7 @@ func execConsoleDaemon(ctx context.Context, vmDirPath string) (*consoleDaemonChi
 		}
 	}()
 
-	ourConsoleFdSocket, theirConsoleFdSocket, err := passfd.SharableUnixSocketpair(
+	ourConsoleFdSocket, theirConsoleFdSocket, err := passfd.ShareableUnixSocketpair(
 		syscall.SOCK_STREAM, 0)
 	if err != nil {
 		return nil, fmt.Errorf("sharable socketpair failed - %w", err)

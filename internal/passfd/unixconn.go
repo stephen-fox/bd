@@ -7,7 +7,7 @@ import (
 	"syscall"
 )
 
-// SharableUnixSocketpair creates two Unix sockets using socketpair(2)
+// ShareableUnixSocketpair creates two Unix sockets using socketpair(2)
 // and returns them in an exec.Cmd-friendly format.
 //
 // The first return value should be used by the caller to communicate with
@@ -16,7 +16,7 @@ import (
 //
 // Typically, callers will set socketType to syscall.SOCK_STREAM
 // and protocol to 0.
-func SharableUnixSocketpair(socketType int, protocol int) (*net.UnixConn, *os.File, error) {
+func ShareableUnixSocketpair(socketType int, protocol int) (*net.UnixConn, *os.File, error) {
 	files, err := SocketpairFiles(syscall.AF_UNIX, socketType, protocol)
 	if err != nil {
 		return nil, nil, fmt.Errorf("socketpair files failed - %w", err)
