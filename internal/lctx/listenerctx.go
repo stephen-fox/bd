@@ -8,37 +8,6 @@ import (
 	"os"
 )
 
-// ListenSharableUnixPath creates a Unix socket at the provided file path
-// and returns a new ListenerCtx along with an *os.File representing the
-// underlying listener's file descriptor. The *os.File can be shared with
-// child processes using another Unix socket or the exec.Cmd.ExtraFiles field.
-//
-// Callers should close the *os.File after passing it to a child process.
-// Closing or canceling the ListenerCtx will close the listener for both
-// the parent and child processes.
-func ListenSharableUnixPath(ctx context.Context, filePath string, perm os.FileMode) (*ListenerCtx, *os.File, error) {
-	liCtx, err := ListenUnixPath(ctx, filePath, perm)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	unixListener, ok := liCtx.listener.(*net.UnixListener)
-	if !ok {
-		_ = liCtx.Close()
-
-		return nil, nil, fmt.Errorf("expected *net.UnixListener - got: %T", liCtx.listener)
-	}
-
-	file, err := unixListener.File()
-	if err != nil {
-		_ = liCtx.Close()
-
-		return nil, nil, fmt.Errorf("unix listener file faild - %w", err)
-	}
-
-	return liCtx, file, nil
-}
-
 // ListenUnixPath creates a Unix socket at the provided file path and
 // returns a new ListenerCtx containing the socket's net.Listener.
 func ListenUnixPath(ctx context.Context, filePath string, perm os.FileMode) (*ListenerCtx, error) {
