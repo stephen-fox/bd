@@ -180,7 +180,6 @@ loop:
 			select {
 			case closeConns <- conn:
 			case <-ctx.Done():
-				_ = conn.Close()
 			}
 		}()
 
