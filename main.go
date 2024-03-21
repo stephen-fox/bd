@@ -542,8 +542,8 @@ func consoleDaemon(flagSet *flag.FlagSet) error {
 
 	rwServer := rwsrv.New(ctx, rwsrv.Config{
 		Listener:   consoleClientsListener,
-		Source:     consoleStdout,
-		ClientDest: consoleStdin,
+		Src:        consoleStdout,
+		Dst:        consoleStdin,
 		OptLogFile: consoleLogFile,
 	})
 

@@ -28,10 +28,15 @@ type Config struct {
 	// Listener is the ListenerCtx to listen for connections on.
 	Listener ListenerCtx
 
-	Source io.ReadCloser
+	// Src is the io.ReadCloser to copy to clients.
+	//
+	// It is automatically closed when the Server exits.
+	Src io.ReadCloser
 
-	// ClientDest is the io.Writer to send client writes to.
-	ClientDest io.WriteCloser
+	// Dst is the io.Writer to copy clients writes to.
+	//
+	// It is automatically closed when the Server exits.
+	Dst io.WriteCloser
 
 	// OptLogFile is an optional log to write console output to.
 	OptLogFile io.Writer
@@ -94,8 +99,8 @@ func (o *Server) loop(ctx context.Context) {
 	currentConns := make(map[net.Conn]struct{})
 
 	defer func() {
-		o.config.ClientDest.Close()
-		o.config.Source.Close()
+		o.config.Dst.Close()
+		o.config.Src.Close()
 
 		if o.err == nil {
 			o.err = errors.New("unknown error")
@@ -117,7 +122,7 @@ func (o *Server) loop(ctx context.Context) {
 	}()
 
 	go func() {
-		_, err := io.Copy(&writer{server: o}, o.config.Source)
+		_, err := io.Copy(&writer{server: o}, o.config.Src)
 		o.readDone <- err
 	}()
 
@@ -163,7 +168,7 @@ loop:
 		}
 
 		go func() {
-			_, _ = io.Copy(o.config.ClientDest, conn)
+			_, _ = io.Copy(o.config.Dst, conn)
 			select {
 			case closeConns <- conn:
 			case <-ctx.Done():
