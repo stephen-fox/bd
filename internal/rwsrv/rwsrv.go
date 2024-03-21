@@ -46,7 +46,7 @@ type Config struct {
 func New(ctx context.Context, config Config) *Server {
 	server := &Server{
 		config:    config,
-		toClients: make(chan writeEvent),
+		toClients: make(chan *writeEvent),
 		readDone:  make(chan error, 1),
 		close:     make(chan struct{}),
 		done:      make(chan struct{}),
@@ -66,7 +66,7 @@ func New(ctx context.Context, config Config) *Server {
 // receive the buffered data when they first connect.
 type Server struct {
 	config    Config
-	toClients chan writeEvent
+	toClients chan *writeEvent
 	readDone  chan error
 	close     chan struct{}
 	done      chan struct{}
@@ -181,18 +181,13 @@ loop:
 		_ = closeThis.Close()
 		delete(currentConns, closeThis)
 	case write := <-o.toClients:
-		var n int
-		var err error
 		if o.config.OptLogFile != nil {
-			n, err = o.config.OptLogFile.Write(write.b)
+			write.n, write.err = o.config.OptLogFile.Write(write.b)
 		} else {
-			n = len(write.b)
+			write.n = len(write.b)
 		}
 
-		write.cb <- writeEventResult{
-			n:   n,
-			err: err,
-		}
+		close(write.done)
 
 		// TODO: Make buffering configurable.
 		// TODO: Always do buffering if it is enabled.
@@ -227,33 +222,28 @@ func (o *writer) Write(b []byte) (int, error) {
 }
 
 func (o *Server) write(b []byte) (int, error) {
-	cb := make(chan writeEventResult, 1)
-
-	select {
-	case <-o.done:
-		return 0, o.err
-	case o.toClients <- writeEvent{
-		b:  b,
-		cb: cb,
-	}:
+	write := &writeEvent{
+		b:    b,
+		done: make(chan struct{}),
 	}
 
 	select {
 	case <-o.done:
 		return 0, o.err
-	case result := <-cb:
-		return result.n, result.err
+	case o.toClients <- write:
+	}
+
+	select {
+	case <-o.done:
+		return 0, o.err
+	case <-write.done:
+		return write.n, write.err
 	}
 }
 
-// TODO: Refactor to use pointers and "ready" channel
-// to indicate callback is complete.
 type writeEvent struct {
-	b  []byte
-	cb chan<- writeEventResult
-}
-
-type writeEventResult struct {
-	n   int
-	err error
+	b    []byte
+	done chan struct{}
+	n    int
+	err  error
 }
