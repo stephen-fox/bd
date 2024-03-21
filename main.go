@@ -519,11 +519,13 @@ func consoleDaemon(flagSet *flag.FlagSet) error {
 	if daemonLogFile == nil {
 		return errors.New("os new file returned nil for the daemon log file - invalid fd")
 	}
+	defer daemonLogFile.Close()
 
 	consoleLogFile := os.NewFile(4, "")
 	if consoleLogFile == nil {
 		return errors.New("os new file returned nil for the console log file - invalid fd")
 	}
+	defer consoleLogFile.Close()
 
 	consoleClientsListener, err := lctx.FromFileDescriptor(ctx, 5, "")
 	if err != nil {
