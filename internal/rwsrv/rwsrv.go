@@ -102,33 +102,40 @@ func (o *Server) Close() error {
 }
 
 func (o *Server) loop(ctx context.Context) {
+	// Use our own Context so that non-context errors
+	// trigger a Context cancelation.
+	var cancelFn func()
+	ctx, cancelFn = context.WithCancel(ctx)
+	defer cancelFn()
+
+	o.err = o.loopWithError(ctx)
+
+	o.config.Dst.Close()
+	o.config.Src.Close()
+
+	if o.err == nil {
+		o.err = errors.New("unknown error")
+	}
+
+	close(o.done)
+}
+
+func (o *Server) loopWithError(ctx context.Context) error {
 	currentConns := make(map[net.Conn]struct{})
-
 	defer func() {
-		o.config.Dst.Close()
-		o.config.Src.Close()
-
-		if o.err == nil {
-			o.err = errors.New("unknown error")
-		}
-
-		errMsg := []byte(o.err.Error() + "\n")
-
 		for conn := range currentConns {
-			_ = conn.SetWriteDeadline(time.Now().Add(time.Second))
-
-			_, _ = conn.Write(errMsg)
-
 			_ = conn.Close()
 
 			delete(currentConns, conn)
 		}
-
-		close(o.done)
 	}()
 
 	go func() {
 		_, err := io.Copy(&writer{server: o}, o.config.Src)
+		if err == nil {
+			err = errors.New("reader exited unexpectedly with nil error")
+		}
+
 		o.readDone <- err
 	}()
 
@@ -142,21 +149,13 @@ func (o *Server) loop(ctx context.Context) {
 loop:
 	select {
 	case <-ctx.Done():
-		o.err = ctx.Err()
-		return
+		return ctx.Err()
 	case <-o.close:
-		o.err = errors.New("daemon has shutdown")
-		return
+		return errors.New("server was closed")
 	case <-o.config.Listener.Done():
-		o.err = fmt.Errorf("listener is done - %w", o.config.Listener.Err())
-		return
+		return fmt.Errorf("listener is done - %w", o.config.Listener.Err())
 	case err := <-o.readDone:
-		if err != nil {
-			o.err = fmt.Errorf("failed to read from reader - %w", err)
-		} else {
-			o.err = errors.New("reader exited unexpectedly without error")
-		}
-		return
+		return fmt.Errorf("failed to read from reader - %w", err)
 	case conn := <-o.config.Listener.Conns():
 		setDeadLineErr := conn.SetReadDeadline(time.Now().Add(time.Second))
 		if setDeadLineErr == nil {
