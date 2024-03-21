@@ -7,12 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"time"
-)
-
-const (
-	NoClientFlag uint8 = iota
-	BufferedOutputClientFlag
 )
 
 // ListenerCtx implements useful context.Context methods and allows
@@ -157,21 +151,12 @@ loop:
 	case err := <-o.readDone:
 		return fmt.Errorf("failed to read from reader - %w", err)
 	case conn := <-o.config.Listener.Conns():
-		setDeadLineErr := conn.SetReadDeadline(time.Now().Add(time.Second))
-		if setDeadLineErr == nil {
-			options := make([]byte, 1)
-
-			_, _ = conn.Read(options)
-
-			if readBuf != nil && readBuf.Len() > 0 && options[0]&BufferedOutputClientFlag != 0 {
-				_, err := conn.Write(readBuf.Bytes())
-				if err != nil {
-					_ = conn.Close()
-					goto loop
-				}
+		if readBuf != nil && readBuf.Len() > 0 {
+			_, err := conn.Write(readBuf.Bytes())
+			if err != nil {
+				_ = conn.Close()
+				goto loop
 			}
-
-			_ = conn.SetReadDeadline(time.Time{})
 		}
 
 		go func() {

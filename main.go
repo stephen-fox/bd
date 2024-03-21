@@ -617,11 +617,6 @@ func console(flagSet *flag.FlagSet) error {
 		"Do not exit if stdin is closed (useful for writing to stdin in a shell,\n"+
 			"closing it, and waiting until the daemon shuts down)")
 
-	noBufferedOutput := flagSet.Bool(
-		"q",
-		false,
-		"Do not retrieve buffered output from daemon's child process")
-
 	_ = flagSet.Parse(os.Args[2:])
 
 	vmName := flagSet.Arg(0)
@@ -666,16 +661,6 @@ func console(flagSet *flag.FlagSet) error {
 	err = unix.CapEnter()
 	if err != nil {
 		return fmt.Errorf("failed to enter capability mode - %w", err)
-	}
-
-	var clientFlags byte
-	if !*noBufferedOutput {
-		clientFlags |= rwsrv.BufferedOutputClientFlag
-	}
-
-	_, err = conn.Write([]byte{clientFlags})
-	if err != nil {
-		return fmt.Errorf("failed to write client flags to socket - %w", err)
 	}
 
 	errs := make(chan error, 2)
