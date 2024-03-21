@@ -38,8 +38,8 @@ type Config struct {
 	// It is automatically closed when the Server exits.
 	Dst io.WriteCloser
 
-	// OptLogFile is an optional log to write console output to.
-	OptLogFile io.Writer
+	// OptSrcLog is an optional log to copy Src reads to.
+	OptSrcLog io.Writer
 }
 
 // New instantiates a Server and starts it.
@@ -181,8 +181,8 @@ loop:
 		_ = closeThis.Close()
 		delete(currentConns, closeThis)
 	case write := <-o.toClients:
-		if o.config.OptLogFile != nil {
-			write.n, write.err = o.config.OptLogFile.Write(write.b)
+		if o.config.OptSrcLog != nil {
+			write.n, write.err = o.config.OptSrcLog.Write(write.b)
 		} else {
 			write.n = len(write.b)
 		}
