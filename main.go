@@ -378,21 +378,30 @@ func execConsoleDaemon(ctx context.Context, vmDirPath string) (*consoleDaemonChi
 	}
 	defer consoleLog.Close()
 
-	_, clientsListener, err := lctx.ListenSharableUnixPath(
-		ctx,
+	clientsLn, clientsLnFd, err := passfd.ShareableUnixListener(
 		consoleSocketPath(vmDirPath),
 		vmSocketsPerm)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create console client unix socket - %w", err)
 	}
-	defer clientsListener.Close()
+	defer func() {
+		clientsLnFd.Close()
+		if err != nil {
+			clientsLn.Close()
+		}
+	}()
 
 	ourConsoleFdSocket, theirConsoleFdSocket, err := passfd.SharableUnixSocketpair(
 		syscall.SOCK_STREAM, 0)
 	if err != nil {
 		return nil, fmt.Errorf("sharable socketpair failed - %w", err)
 	}
-	defer theirConsoleFdSocket.Close()
+	defer func() {
+		theirConsoleFdSocket.Close()
+		if err != nil {
+			ourConsoleFdSocket.Close()
+		}
+	}()
 
 	consoleDaemon := exec.Command(os.Args[0], "console-daemon")
 
@@ -425,7 +434,7 @@ func execConsoleDaemon(ctx context.Context, vmDirPath string) (*consoleDaemonChi
 	consoleDaemon.ExtraFiles = []*os.File{
 		daemonLog,
 		consoleLog,
-		clientsListener,
+		clientsLnFd,
 		theirConsoleFdSocket,
 	}
 
@@ -469,6 +478,10 @@ func execConsoleDaemon(ctx context.Context, vmDirPath string) (*consoleDaemonChi
 
 		go func() {
 			child.err = consoleDaemon.Wait()
+
+			clientsLn.Close()
+			ourConsoleFdSocket.Close()
+
 			close(child.done)
 		}()
 
