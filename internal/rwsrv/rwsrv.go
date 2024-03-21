@@ -154,7 +154,7 @@ loop:
 		if err != nil {
 			o.err = fmt.Errorf("failed to read from reader - %w", err)
 		} else {
-			o.err = errors.New("read exited unexpectedly without error")
+			o.err = errors.New("reader exited unexpectedly without error")
 		}
 		return
 	case conn := <-o.config.Listener.Conns():
