@@ -30,7 +30,7 @@ import (
 	"gitlab.com/stephen-fox/bhyved/internal/hsio"
 	"gitlab.com/stephen-fox/bhyved/internal/lctx"
 	"gitlab.com/stephen-fox/bhyved/internal/passfd"
-	"gitlab.com/stephen-fox/bhyved/internal/writerserver"
+	"gitlab.com/stephen-fox/bhyved/internal/rwsrv"
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 )
@@ -540,7 +540,7 @@ func consoleDaemon(flagSet *flag.FlagSet) error {
 		passfd.ReadCloserUpdaterToRecvFn(consoleStdout),
 	})
 
-	writerServer := writerserver.New(ctx, writerserver.Config{
+	rwServer := rwsrv.New(ctx, rwsrv.Config{
 		Listener:   consoleClientsListener,
 		Source:     consoleStdout,
 		ClientDest: consoleStdin,
@@ -552,14 +552,14 @@ func consoleDaemon(flagSet *flag.FlagSet) error {
 		err = ctx.Err()
 	case <-passfdClient.Done():
 		err = fmt.Errorf("passfd client exited - %w", passfdClient.Err())
-	case <-writerServer.Done():
-		err = fmt.Errorf("writerserver exited - %w", writerServer.Err())
+	case <-rwServer.Done():
+		err = fmt.Errorf("rw server exited - %w", rwServer.Err())
 	}
 
 	cancelFn()
 
 	<-passfdClient.Done()
-	<-writerServer.Done()
+	<-rwServer.Done()
 
 	return err
 }
@@ -669,7 +669,7 @@ func console(flagSet *flag.FlagSet) error {
 
 	var clientFlags byte
 	if !*noBufferedOutput {
-		clientFlags |= writerserver.BufferedOutputClientFlag
+		clientFlags |= rwsrv.BufferedOutputClientFlag
 	}
 
 	_, err = conn.Write([]byte{clientFlags})

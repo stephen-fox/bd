@@ -1,4 +1,4 @@
-package writerserver
+package rwsrv
 
 import (
 	"bytes"
@@ -52,9 +52,13 @@ func New(ctx context.Context, config Config) *Server {
 	return server
 }
 
-// Server serves clients, writing their input to an io.Writer. It buffers
-// and data provided to the Write method, eventually writing it to any
-// new or existing clients.
+// Server serves an io.Reader and an io.Writer to clients.
+//
+// Clients' writes are sent to the io.Writer and any data read from the
+// io.Reader are written to the clients.
+//
+// Optionally, reads from the io.Reader can be buffered so that clients
+// receive the buffered data when they first connect.
 type Server struct {
 	config    Config
 	toClients chan writeEvent
