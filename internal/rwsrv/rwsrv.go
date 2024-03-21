@@ -195,8 +195,6 @@ loop:
 			write.n = len(write.b)
 		}
 
-		close(write.done)
-
 		if readBuf != nil {
 			readBuf.Write(write.b)
 
@@ -214,6 +212,16 @@ loop:
 				delete(currentConns, conn)
 			}
 		}
+
+		// It is very important that we unblock the
+		// write here because the []byte is shared
+		// between the reader Go routine and this
+		// this one. If we unblock too early,
+		// the []byte may get written too while
+		// we are copying it into the conn.
+		// Such a case leads to malformed data
+		// being written to the client.
+		close(write.done)
 	}
 
 	goto loop
