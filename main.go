@@ -544,6 +544,7 @@ func consoleDaemon(flagSet *flag.FlagSet) error {
 		Listener:  consoleClientsListener,
 		Src:       consoleStdout,
 		Dst:       consoleStdin,
+		OptBufSz:  32 * 1024,
 		OptSrcLog: consoleLogFile,
 	})
 

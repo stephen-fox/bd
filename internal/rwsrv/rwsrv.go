@@ -33,10 +33,16 @@ type Config struct {
 	// It is automatically closed when the Server exits.
 	Src io.ReadCloser
 
-	// Dst is the io.Writer to copy clients writes to.
+	// Dst is the io.Writer to copy clients' writes to.
 	//
 	// It is automatically closed when the Server exits.
 	Dst io.WriteCloser
+
+	// OptBuf is the number of bytes to save of Src reads.
+	// If greater than zero, reads will be buffered such
+	// that newly connected clients will receive the
+	// buffered data when they first connect.
+	OptBufSz uint
 
 	// OptSrcLog is an optional log to copy Src reads to.
 	OptSrcLog io.Writer
@@ -128,8 +134,10 @@ func (o *Server) loop(ctx context.Context) {
 
 	closeConns := make(chan net.Conn)
 
-	fromProxBufMaxBytes := 1024
-	fromProcBuf := bytes.NewBuffer(nil)
+	var readBuf *bytes.Buffer
+	if o.config.OptBufSz > 0 {
+		readBuf = bytes.NewBuffer(nil)
+	}
 
 loop:
 	select {
@@ -156,8 +164,8 @@ loop:
 
 			_, _ = conn.Read(options)
 
-			if fromProcBuf.Len() > 0 && options[0]&BufferedOutputClientFlag != 0 {
-				_, err := fromProcBuf.WriteTo(conn)
+			if readBuf != nil && readBuf.Len() > 0 && options[0]&BufferedOutputClientFlag != 0 {
+				_, err := conn.Write(readBuf.Bytes())
 				if err != nil {
 					_ = conn.Close()
 					goto loop
@@ -189,15 +197,13 @@ loop:
 
 		close(write.done)
 
-		// TODO: Make buffering configurable.
-		// TODO: Always do buffering if it is enabled.
-		if len(currentConns) == 0 {
-			fromProcBuf.Write(write.b)
+		if readBuf != nil {
+			readBuf.Write(write.b)
 
-			if fromProcBuf.Len() > fromProxBufMaxBytes {
-				discard := fromProcBuf.Len() - fromProxBufMaxBytes
+			if readBuf.Len() > int(o.config.OptBufSz) {
+				discard := readBuf.Len() - int(o.config.OptBufSz)
 
-				io.CopyN(io.Discard, fromProcBuf, int64(discard))
+				io.CopyN(io.Discard, readBuf, int64(discard))
 			}
 		}
 
