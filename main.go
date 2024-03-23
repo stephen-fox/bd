@@ -644,11 +644,35 @@ func consoleDaemon(flagSet *flag.FlagSet) error {
 }
 
 func power(flagSet *flag.FlagSet) error {
+	// doNotFailIfDaemonIsStopped := flagSet.Bool(
+	// 	"",
+	// 	false,
+	// 	"")
+
+	singleVmMode := flagSet.Bool(
+		"M",
+		false,
+		"Automatically pick the vm (only permitted if one vm is running)")
+
 	_ = flagSet.Parse(os.Args[2:])
 
 	vmName := flagSet.Arg(0)
 	if vmName == "" {
-		return errors.New("please specify a vm name as the first non-flag argument")
+		if !*singleVmMode {
+			return errors.New("please specify a vm name as the first non-flag argument")
+		}
+
+		entries, err := os.ReadDir("/dev/vmm")
+		if err != nil {
+			return fmt.Errorf("failed to read vmm dir - %w", err)
+		}
+
+		if len(entries) != 1 {
+			return fmt.Errorf("expected only one vm to be running - found: %d",
+				len(entries))
+		}
+
+		vmName = entries[0].Name()
 	}
 
 	vmDirPath := vmRuntimeDirPath(vmName)
@@ -689,6 +713,11 @@ func power(flagSet *flag.FlagSet) error {
 }
 
 func console(flagSet *flag.FlagSet) error {
+	singleVmMode := flagSet.Bool(
+		"M",
+		false,
+		"Automatically pick the vm (only permitted if one vm is running)")
+
 	allowStdinToClose := flagSet.Bool(
 		"w",
 		false,
@@ -699,7 +728,21 @@ func console(flagSet *flag.FlagSet) error {
 
 	vmName := flagSet.Arg(0)
 	if vmName == "" {
-		return errors.New("please specify a vm name as the first non-flag argument")
+		if !*singleVmMode {
+			return errors.New("please specify a vm name as the first non-flag argument")
+		}
+
+		entries, err := os.ReadDir("/dev/vmm")
+		if err != nil {
+			return fmt.Errorf("failed to read vmm dir - %w", err)
+		}
+
+		if len(entries) != 1 {
+			return fmt.Errorf("expected only one vm to be running - found: %d",
+				len(entries))
+		}
+
+		vmName = entries[0].Name()
 	}
 
 	vmDirPath := vmRuntimeDirPath(vmName)
@@ -843,7 +886,11 @@ func powerStateSocketPath(runtimeDirPath string) string {
 }
 
 func vmRuntimeDirPath(vmName string) string {
-	return filepath.Join("/var", appName, vmName)
+	return filepath.Join(appRuntimeDirPath(), vmName)
+}
+
+func appRuntimeDirPath() string {
+	return filepath.Join("/var", appName)
 }
 
 type fileModeFlag struct {
