@@ -207,9 +207,30 @@ func daemon(flagSet *flag.FlagSet) error {
 	if !isChild {
 		if *startSyslogd {
 			syslogd := exec.Command("/usr/sbin/syslogd", "-s")
+			syslogd.SysProcAttr = &syscall.SysProcAttr{
+				Setpgid: true, // Do not propogate signals to child.
+			}
 
 			// Ignore the error because syslogd may already be running.
-			_ = syslogd.Start()
+			_ = syslogd.Run()
+
+			start := time.Now()
+
+			for {
+				if time.Since(start) > 5*time.Second {
+					return errors.New("timed-out waiting for syslogd to start")
+				}
+
+				writer, err := syslog.New(syslog.LOG_DAEMON, "")
+				if err != nil {
+					time.Sleep(100 * time.Millisecond)
+					continue
+				}
+
+				writer.Close()
+
+				break
+			}
 		}
 
 		var childSysProcAttr *syscall.SysProcAttr
