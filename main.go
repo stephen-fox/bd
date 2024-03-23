@@ -240,12 +240,26 @@ func daemon(flagSet *flag.FlagSet) error {
 		}
 
 		restarted := exec.Command(os.Args[0], os.Args[1:]...)
+
+		stdoutPipe, err := restarted.StdoutPipe()
+		if err != nil {
+			return fmt.Errorf("failed to create stdout pipe for child - %w", err)
+		}
+		defer stdoutPipe.Close()
+
+		gotWrite := make(chan error, 1)
+		go func() {
+			_, err := stdoutPipe.Read(make([]byte, 1))
+			gotWrite <- err
+		}()
+
+		restarted.Stderr = os.Stderr
 		restarted.Dir = "/var/empty"
 		restarted.Env = os.Environ()
 		restarted.Env = append(restarted.Env, childEnvName+"=true")
 		restarted.SysProcAttr = childSysProcAttr
 
-		err := restarted.Start()
+		err = restarted.Start()
 		if err != nil {
 			return fmt.Errorf("failed to exec to background - %w", err)
 		}
@@ -264,7 +278,20 @@ func daemon(flagSet *flag.FlagSet) error {
 			}
 		}
 
-		return nil
+		select {
+		case <-time.After(5 * time.Second):
+			_ = restarted.Process.Kill()
+
+			return errors.New("timed-out waiting for child process to be ready")
+		case err = <-gotWrite:
+			if err != nil {
+				_ = restarted.Process.Kill()
+
+				return fmt.Errorf("failed to read from child's stdout - %w", err)
+			}
+
+			return nil
+		}
 	}
 
 	vmName := flagSet.Arg(flagSet.NArg() - 1)
@@ -333,6 +360,21 @@ func daemon(flagSet *flag.FlagSet) error {
 		flagSet.Args(),
 		powerStateRequests,
 		optConsoleDaemonConn)
+
+	// Wait to see if runner exits due to a bhyve error.
+	select {
+	case <-runner.Done():
+		// TODO: If jail scenarios, it appears that syslogd
+		// does not get all the writes we sent it if we exit
+		// quickly. Need to investigate by forcing a bhyve
+		// misconfiguration.
+		return fmt.Errorf("bhyve runner exited unexpectedly during initial start - %w",
+			runner.Err())
+	case <-time.After(2 * time.Second):
+		if !*foreground {
+			os.Stdout.Write([]byte{0x41})
+		}
+	}
 
 	select {
 	case <-runner.Done():
