@@ -69,7 +69,8 @@ func (o *Runner) loop(ctx context.Context) {
 func (o *Runner) loopWithError(ctx context.Context) error {
 	err := o.start(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to start bhyve for the first time - %w", err)
+		return fmt.Errorf("failed to start bhyve for the first time - %w - stderr: %q",
+			err, o.stderr.String())
 	}
 	defer o.bhyvectlDestroyLastDitch(5*time.Second, "runner exit")
 
