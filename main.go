@@ -123,10 +123,10 @@ func genmac() error {
 		}
 
 		if i == 0 {
-			// Set LSB 0 to 0.
-			b[0] &= 0b11111110
-			//b[0] <<= 1
-			//b[0] <<= 0
+			// Last two bits need to be:
+			// 1 0
+			b[0] <<= 2
+			b[0] ^= 0b00000010
 		}
 
 		mac += hex.EncodeToString(b)
