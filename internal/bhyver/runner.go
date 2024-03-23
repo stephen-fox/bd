@@ -226,7 +226,7 @@ func (o *Runner) start(ctx context.Context) error {
 
 		stdoutFile, ok := stdout.(*os.File)
 		if !ok {
-			return fmt.Errorf("expected stdout pipe to be *os.File - got %T", stdin)
+			return fmt.Errorf("expected stdout pipe to be *os.File - got %T", stdout)
 		}
 
 		err = passfd.Put(o.consoled, stdinFile, stdoutFile)
