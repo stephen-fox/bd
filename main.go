@@ -153,11 +153,6 @@ func daemon(flagSet *flag.FlagSet) error {
 			"(requires that bhyve use the serial console 'stdio' mode - e.g.,\n"+
 			"'-s 31,lpc -l com1,stdio')")
 
-	startSyslogd := flagSet.Bool(
-		"s",
-		false,
-		"Start syslogd prior to executing bhyve")
-
 	runAsUser := flagSet.String(
 		"u",
 		"",
@@ -205,34 +200,6 @@ func daemon(flagSet *flag.FlagSet) error {
 
 	isChild := os.Getenv(childEnvName) != "" || *foreground
 	if !isChild {
-		if *startSyslogd {
-			syslogd := exec.Command("/usr/sbin/syslogd", "-s")
-			syslogd.SysProcAttr = &syscall.SysProcAttr{
-				Setpgid: true, // Do not propogate signals to child.
-			}
-
-			// Ignore the error because syslogd may already be running.
-			_ = syslogd.Run()
-
-			start := time.Now()
-
-			for {
-				if time.Since(start) > 5*time.Second {
-					return errors.New("timed-out waiting for syslogd to start")
-				}
-
-				writer, err := syslog.New(syslog.LOG_DAEMON, "")
-				if err != nil {
-					time.Sleep(100 * time.Millisecond)
-					continue
-				}
-
-				writer.Close()
-
-				break
-			}
-		}
-
 		var childSysProcAttr *syscall.SysProcAttr
 		if *runAsUser != "" {
 			// TODO: Re-implement this.
