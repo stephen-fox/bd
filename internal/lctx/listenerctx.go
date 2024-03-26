@@ -99,7 +99,7 @@ func (o *ListenerCtx) Err() error {
 
 func (o *ListenerCtx) loop(ctx context.Context) {
 	defer func() {
-		if o.err != nil {
+		if o.err == nil {
 			o.err = errors.New("exited due to unknown error")
 		}
 
