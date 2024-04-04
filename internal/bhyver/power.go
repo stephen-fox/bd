@@ -9,7 +9,7 @@ import (
 	"net"
 	"time"
 
-	"gitlab.com/stephen-fox/bhyved/internal/lctx"
+	"gitlab.com/stephen-fox/bd/internal/lctx"
 )
 
 // PowerStateRequestsHanlder handles clients accepted by listener until

@@ -13,7 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	"gitlab.com/stephen-fox/bhyved/internal/passfd"
+	"gitlab.com/stephen-fox/bd/internal/passfd"
 )
 
 // StartRunner instantiates a Runner and starts it.
@@ -195,7 +195,7 @@ func (o *Runner) start(ctx context.Context) error {
 		// We set Setpgid to true because, by default,
 		// a signal sent to us will be automatically
 		// sent to any children (i.e., pressing ctrl+c
-		// to send SIGINT to bhyved will also send
+		// to send SIGINT to bd will also send
 		// a SIGINT to the bhyve child process).
 		// This is bad because SIGINT makes bhyve
 		// exit immediately.

@@ -1,4 +1,4 @@
-// bhyved
+// bd
 package main
 
 import (
@@ -26,17 +26,17 @@ import (
 	"syscall"
 	"time"
 
-	"gitlab.com/stephen-fox/bhyved/internal/bhyver"
-	"gitlab.com/stephen-fox/bhyved/internal/hsio"
-	"gitlab.com/stephen-fox/bhyved/internal/lctx"
-	"gitlab.com/stephen-fox/bhyved/internal/passfd"
-	"gitlab.com/stephen-fox/bhyved/internal/rwsrv"
+	"gitlab.com/stephen-fox/bd/internal/bhyver"
+	"gitlab.com/stephen-fox/bd/internal/hsio"
+	"gitlab.com/stephen-fox/bd/internal/lctx"
+	"gitlab.com/stephen-fox/bd/internal/passfd"
+	"gitlab.com/stephen-fox/bd/internal/rwsrv"
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 )
 
 const (
-	appName = "bhyved"
+	appName = "bd"
 	usage   = appName + `
 
 SYNOPSIS
