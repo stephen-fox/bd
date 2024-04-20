@@ -624,27 +624,29 @@ func power(flagSet *flag.FlagSet) error {
 	_ = flagSet.Parse(os.Args[2:])
 
 	vmName := flagSet.Arg(0)
-	if vmName == "" {
+	powerStateStr := flagSet.Arg(1)
+
+	if flagSet.NArg() == 1 {
 		if !*singleVmMode {
 			return errors.New("please specify a vm name as the first non-flag argument")
 		}
 
-		entries, err := os.ReadDir("/dev/vmm")
+		entries, err := os.ReadDir(appRuntimeDirPath())
 		if err != nil {
 			return fmt.Errorf("failed to read vmm dir - %w", err)
 		}
 
 		if len(entries) != 1 {
-			return fmt.Errorf("expected only one vm to be running - found: %d",
+			return fmt.Errorf("expected only one - found: %d",
 				len(entries))
 		}
 
 		vmName = entries[0].Name()
+		powerStateStr = flagSet.Arg(0)
 	}
 
 	vmDirPath := vmRuntimeDirPath(vmName)
 
-	powerStateStr := flagSet.Arg(1)
 	if powerStateStr == "" {
 		return errors.New("please specify a power state as the last non-flag argument")
 	}
@@ -699,13 +701,13 @@ func console(flagSet *flag.FlagSet) error {
 			return errors.New("please specify a vm name as the first non-flag argument")
 		}
 
-		entries, err := os.ReadDir("/dev/vmm")
+		entries, err := os.ReadDir(appRuntimeDirPath())
 		if err != nil {
 			return fmt.Errorf("failed to read vmm dir - %w", err)
 		}
 
 		if len(entries) != 1 {
-			return fmt.Errorf("expected only one vm to be running - found: %d",
+			return fmt.Errorf("expected only one vm - found: %d",
 				len(entries))
 		}
 
