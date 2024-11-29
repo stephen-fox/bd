@@ -181,6 +181,8 @@ func (o *Runner) start(ctx context.Context) error {
 	log.Println("starting bhyve...")
 
 	if o.vmmDeviceExists() {
+		// TODO: We need to lookup the process first and
+		// try sigkill'ing it.
 		err := o.bhyvectlDestroy(ctx)
 		if err != nil {
 			return fmt.Errorf("failed to destroy existing vm device on startup - %w", err)
@@ -301,6 +303,7 @@ func (o *Runner) pullPowerCable(ctx context.Context) error {
 
 	select {
 	case <-ctx.Done():
+		// TODO: Need a last ditch wait before destroying the vmm.
 		log.Printf("timed-out waiting for bhyve to exit after sending sigkill - %s",
 			ctx.Err())
 
