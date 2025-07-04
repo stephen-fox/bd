@@ -37,9 +37,12 @@ import (
 
 const (
 	appName = "bd"
-	usage   = appName + `
+	version = "0.0.2"
+
+	usage = appName + `
 
 SYNOPSIS
+  ` + appName + ` version
   ` + appName + ` [options] genmac [genmac-options]
   ` + appName + ` [options] daemon [daemon-options] -- <bhyve-args>
   ` + appName + ` [options] power [power-options] <vm-name> <on|off|pull-cable|reboot|pull-cable-reboot>
@@ -83,6 +86,9 @@ func mainWithError() error {
 	flagSet := flag.NewFlagSet(flag.Arg(0), flag.ExitOnError)
 
 	switch flag.Arg(0) {
+	case "version":
+		fmt.Println(version)
+		return nil
 	case "genmac":
 		return genmac()
 	case "daemon":
