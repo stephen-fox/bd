@@ -12,28 +12,27 @@ import (
 	"gitlab.com/stephen-fox/bd/internal/lctx"
 )
 
-// PowerStateRequestsHanlder handles clients accepted by listener until
+// PowerStateRequestsHandler handles clients accepted by listener until
 // the context is canceled or the listener returns an error.
-func PowerStateRequestsHanlder(ctx context.Context, listener *lctx.ListenerCtx) <-chan PowerStateRequest {
-	requests := make(chan PowerStateRequest)
+func PowerStateRequestsHandler(ctx context.Context, listener *lctx.ListenerCtx) <-chan *PowerStateRequest {
+	requests := make(chan *PowerStateRequest)
 
 	go func() {
+		defer close(requests)
+
 		for {
 			select {
 			case <-ctx.Done():
-				// TODO: Tell something about this.
 				log.Printf("power state handler exiting - %s", ctx.Err())
 
 				return
 			case <-listener.Done():
-				// TODO: Tell something about this.
-				log.Printf("listener is done - %s", listener.Err())
+				log.Printf("power state listener is done - %s", listener.Err())
 
 				return
 			case conn := <-listener.Conns():
 				err := handlePowerStateRequest(ctx, requests, conn)
 				if err != nil {
-					// TODO: Tell something about this.
 					log.Printf("power state handler exiting - %s", err)
 
 					return
@@ -45,7 +44,7 @@ func PowerStateRequestsHanlder(ctx context.Context, listener *lctx.ListenerCtx) 
 	return requests
 }
 
-func handlePowerStateRequest(ctx context.Context, requests chan PowerStateRequest, conn net.Conn) error {
+func handlePowerStateRequest(ctx context.Context, requests chan *PowerStateRequest, conn net.Conn) error {
 	defer conn.Close()
 
 	sendMsgFn := func(msg string) error {
@@ -70,17 +69,9 @@ func handlePowerStateRequest(ctx context.Context, requests chan PowerStateReques
 		return nil
 	}
 
-	cb := make(chan error, 1)
-
-	select {
-	case <-ctx.Done():
-		sendMsgFn(fmt.Sprintf("error: %s", ctx.Err().Error()))
-
-		return ctx.Err()
-	case requests <- PowerStateRequest{
+	request := &PowerStateRequest{
 		newState: state,
-		cb:       cb,
-	}:
+		cb:       make(chan error, 1),
 	}
 
 	select {
@@ -88,7 +79,15 @@ func handlePowerStateRequest(ctx context.Context, requests chan PowerStateReques
 		sendMsgFn(fmt.Sprintf("error: %s", ctx.Err().Error()))
 
 		return ctx.Err()
-	case err := <-cb:
+	case requests <- request:
+	}
+
+	select {
+	case <-ctx.Done():
+		sendMsgFn(fmt.Sprintf("error: %s", ctx.Err().Error()))
+
+		return ctx.Err()
+	case err := <-request.cb:
 		if err != nil {
 			sendMsgFn(fmt.Sprintf("error: %s", err.Error()))
 		} else {

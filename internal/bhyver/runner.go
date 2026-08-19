@@ -16,16 +16,22 @@ import (
 	"gitlab.com/stephen-fox/bd/internal/passfd"
 )
 
+type RunnerConfig struct {
+	VmName         string
+	BhyveArgs      []string
+	StatusRequests <-chan *StatusRequest
+	PowerRequests  <-chan *PowerStateRequest
+
+	OptConsoleFdConn *net.UnixConn
+}
+
 // StartRunner instantiates a Runner and starts it.
-func StartRunner(ctx context.Context, vmName string, bhyveArgs []string, powerRequests <-chan PowerStateRequest, optConsoleFdConn *net.UnixConn) *Runner {
+func StartRunner(ctx context.Context, config RunnerConfig) *Runner {
 	runner := &Runner{
-		vmName:    vmName,
-		bhyveArgs: bhyveArgs,
-		consoled:  optConsoleFdConn,
-		powerReqs: powerRequests,
-		exited:    make(chan error, 1),
-		stderr:    bytes.NewBuffer(nil),
-		done:      make(chan struct{}),
+		config: config,
+		exited: make(chan error, 1),
+		stderr: bytes.NewBuffer(nil),
+		done:   make(chan struct{}),
 	}
 
 	go runner.loop(ctx)
@@ -35,15 +41,12 @@ func StartRunner(ctx context.Context, vmName string, bhyveArgs []string, powerRe
 
 // Runner operates a bhyve process.
 type Runner struct {
-	vmName    string
-	bhyveArgs []string
-	consoled  *net.UnixConn
-	powerReqs <-chan PowerStateRequest
-	exited    chan error
-	execCmd   *exec.Cmd
-	stderr    *bytes.Buffer
-	done      chan struct{}
-	err       error
+	config  RunnerConfig
+	exited  chan error
+	execCmd *exec.Cmd
+	stderr  *bytes.Buffer
+	done    chan struct{}
+	err     error
 }
 
 func (o *Runner) Done() <-chan struct{} {
@@ -74,45 +77,93 @@ func (o *Runner) loopWithError(ctx context.Context) error {
 	}
 	defer o.bhyvectlDestroyLastDitch(5*time.Second, "runner exit")
 
-	for {
-		select {
-		case <-ctx.Done():
-			timeout := time.Minute
+	var finalErr error
 
-			log.Printf("shutting down due to %s - waiting %s for bhyve to exit...",
-				ctx.Err(), timeout.String())
+loop:
+	if o.execCmd == nil || o.execCmd.ProcessState != nil {
+		// TODO: This if statement is a super hack. It attempts to
+		// simplify the state machine of this code to always exit
+		// when bhyve is no longer running. Deeper down, the code
+		// still restarts bhyve if the VM indicates it is rebooting,
+		// but this loop never sees bhyve exit.
+		//
+		// All of this code needs to be restructured :( When I
+		// originally wrote this code, I thought there were
+		// would be a complex state machine handling different
+		// states. Going forward, I think this will simply be:
+		// "if bhyve exited and the VM did not indicate it is
+		// rebooting, then this code is also done".
+		//
+		// I just do not have the time to untangle that now.
+		return fmt.Errorf("bhyve exited")
+	}
 
-			stopCtx, cancelFn := context.WithTimeout(context.Background(), timeout)
-			defer cancelFn()
+	select {
+	case <-ctx.Done():
+		finalErr = ctx.Err()
 
-			err := o.acpiOffOrKill(stopCtx)
-			if err != nil {
-				log.Printf("failed to stop bhyve on shutdown - %s", err)
-			} else {
-				log.Println("successfully stopped bhyve")
-			}
+		goto done
+	case statusRequest, ok := <-o.config.StatusRequests:
+		if !ok {
+			finalErr = errors.New("status request handler exited")
 
-			return ctx.Err()
-		case powerRequest := <-o.powerReqs:
-			clientMsg, err := o.onPowerStateRequest(ctx, powerRequest.newState)
+			goto done
+		}
 
-			if clientMsg != "" {
-				powerRequest.cb <- errors.New(clientMsg)
-			} else {
-				powerRequest.cb <- nil
-			}
-			close(powerRequest.cb)
+		if o.isRunning() {
+			statusRequest.status = "running"
+		} else {
+			statusRequest.status = "stopped"
+		}
 
-			if err != nil {
-				return fmt.Errorf("failed to handle power state change - %w", err)
-			}
-		case exitedErr := <-o.exited:
-			err := o.onExecCmdExit(ctx, exitedErr)
-			if err != nil {
-				return fmt.Errorf("failed to handle bhyve exit error - %w", err)
-			}
+		close(statusRequest.cb)
+	case powerRequest, ok := <-o.config.PowerRequests:
+		if !ok {
+			finalErr = errors.New("power state request handler exited")
+
+			goto done
+		}
+
+		clientMsg, err := o.onPowerStateRequest(ctx, powerRequest.newState)
+
+		if clientMsg != "" {
+			powerRequest.cb <- errors.New(clientMsg)
+		} else {
+			powerRequest.cb <- nil
+		}
+		close(powerRequest.cb)
+
+		if err != nil {
+			finalErr = fmt.Errorf("failed to handle power state change - %w", err)
+
+			goto done
+		}
+	case exitedErr := <-o.exited:
+		err := o.onExecCmdExit(ctx, exitedErr)
+		if err != nil {
+			return fmt.Errorf("failed to handle bhyve exit error - %w", err)
 		}
 	}
+
+	goto loop
+
+done:
+	const shutdownTimeout = time.Minute
+
+	log.Printf("shutting down due to %s - waiting %s for bhyve to exit...",
+		finalErr, shutdownTimeout.String())
+
+	stopCtx, cancelFn := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancelFn()
+
+	err = o.acpiOffOrKill(stopCtx)
+	if err != nil {
+		log.Printf("failed to stop bhyve on shutdown - %s", err)
+	} else {
+		log.Println("successfully stopped bhyve")
+	}
+
+	return finalErr
 }
 
 func (o *Runner) onPowerStateRequest(ctx context.Context, newState PowerState) (clientMsg string, err error) {
@@ -191,7 +242,7 @@ func (o *Runner) start(ctx context.Context) error {
 
 	o.stderr.Reset()
 
-	bhyve := exec.Command("/usr/sbin/bhyve", o.bhyveArgs...)
+	bhyve := exec.Command("/usr/sbin/bhyve", o.config.BhyveArgs...)
 
 	bhyve.SysProcAttr = &syscall.SysProcAttr{
 		// We set Setpgid to true because, by default,
@@ -210,7 +261,7 @@ func (o *Runner) start(ctx context.Context) error {
 
 	bhyve.Stderr = o.stderr
 
-	if o.consoled != nil {
+	if o.config.OptConsoleFdConn != nil {
 		stdin, err := bhyve.StdinPipe()
 		if err != nil {
 			return fmt.Errorf("failed to create stdin pipe - %w", err)
@@ -231,7 +282,7 @@ func (o *Runner) start(ctx context.Context) error {
 			return fmt.Errorf("expected stdout pipe to be *os.File - got %T", stdout)
 		}
 
-		err = passfd.Put(o.consoled, stdinFile, stdoutFile)
+		err = passfd.Put(o.config.OptConsoleFdConn, stdinFile, stdoutFile)
 		if err != nil {
 			return fmt.Errorf("failed to send console fds to console daemon - %w", err)
 		}
@@ -348,7 +399,7 @@ func (o *Runner) bhyvectl(ctx context.Context, arg string, args ...string) error
 		ctx,
 		"/usr/sbin/bhyvectl",
 		"--vm",
-		o.vmName,
+		o.config.VmName,
 		arg)
 
 	if len(args) > 0 {
@@ -365,7 +416,7 @@ func (o *Runner) bhyvectl(ctx context.Context, arg string, args ...string) error
 }
 
 func (o *Runner) vmmDeviceExists() bool {
-	_, statErr := os.Stat(filepath.Join("/dev/vmm", o.vmName))
+	_, statErr := os.Stat(filepath.Join("/dev/vmm", o.config.VmName))
 	return statErr == nil
 }
 
@@ -376,6 +427,7 @@ func (o *Runner) isRunning() bool {
 
 func (o *Runner) onExecCmdExit(ctx context.Context, exitedErr error) error {
 	// Note: Refer to "man bhyve" for exit status info.
+
 	if exitedErr == nil {
 		// err == nil means exit status 0.
 		log.Println("bhyve exited with status 0 - vm was rebooted")
@@ -412,5 +464,5 @@ func (o *Runner) onExecCmdExit(ctx context.Context, exitedErr error) error {
 			exitedErr, o.stderr.String())
 	}
 
-	return nil
+	return fmt.Errorf("bhyve exited")
 }
