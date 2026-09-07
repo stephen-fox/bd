@@ -6,7 +6,7 @@ import (
 	"log"
 	"net"
 
-	"gitlab.com/stephen-fox/bd/internal/lctx"
+	"codeberg.org/stephen-fox/bd/internal/lctx"
 )
 
 // StatusRequestsHandler handles clients accepted by listener until

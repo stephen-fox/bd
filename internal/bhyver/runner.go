@@ -13,7 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	"gitlab.com/stephen-fox/bd/internal/passfd"
+	"codeberg.org/stephen-fox/bd/internal/passfd"
 )
 
 type RunnerConfig struct {

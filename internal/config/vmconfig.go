@@ -13,9 +13,9 @@ import (
 	"strings"
 	"time"
 
-	"gitlab.com/stephen-fox/bd/internal/ini"
-	"gitlab.com/stephen-fox/bd/internal/nettools"
-	"gitlab.com/stephen-fox/bd/internal/shellquote"
+	"codeberg.org/stephen-fox/bd/internal/ini"
+	"codeberg.org/stephen-fox/bd/internal/nettools"
+	"codeberg.org/stephen-fox/bd/internal/shellquote"
 )
 
 // VmConfig::General section and its parameters.

@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"gitlab.com/stephen-fox/bd/internal/ini"
+	"codeberg.org/stephen-fox/bd/internal/ini"
 )
 
 // AppConfig::General section and its parameters

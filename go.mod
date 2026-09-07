@@ -1,4 +1,4 @@
-module gitlab.com/stephen-fox/bd
+module codeberg.org/stephen-fox/bd
 
 go 1.18
 
