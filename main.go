@@ -1,4 +1,4 @@
-// bd
+// bd (bhyve daemon) is a bhyve virtual machine manager, similar to vm-bhyve.
 package main
 
 import (
@@ -41,25 +41,23 @@ const (
 	appName = "bd"
 	version = "0.1.0"
 
-	usage = appName + `
-
-SYNOPSIS
+	usage = `SYNOPSIS
+  ` + appName + ` -h
   ` + appName + ` version
-  ` + appName + ` [OPTIONS] install [INIT-OPTIONS]
-  ` + appName + ` [OPTIONS] genmac [GENMAC-OPTIONS]
+  ` + appName + ` [OPTIONS] install [INSTALL-OPTIONS]
   ` + appName + ` [OPTIONS] new [NEW-OPTIONS] VM-NAME
   ` + appName + ` [OPTIONS] ls [LIST-OPTIONS] [VM-NAMES...]
   ` + appName + ` [OPTIONS] status [STATUS-OPTIONS] VM-NAME
   ` + appName + ` [OPTIONS] start [START-OPTIONS] VM-NAME
   ` + appName + ` [OPTIONS] restart [RESTART-OPTIONS] VM-NAME
-  ` + appName + ` [OPTIONS] autostart [AUTOSTART-OPTIONS]
   ` + appName + ` [OPTIONS] stop [STOP-OPTIONS] VM-NAME
-  ` + appName + ` [OPTIONS] pull-cable [PULLCABLE-OPTIONS] VM-NAME
+  ` + appName + ` [OPTIONS] unplug [UNPLUG-OPTIONS] VM-NAME
+  ` + appName + ` [OPTIONS] autostart [AUTOSTART-OPTIONS]
   ` + appName + ` [OPTIONS] console [CONSOLE-OPTIONS] VM-NAME
+  ` + appName + ` [OPTIONS] genmac [GENMAC-OPTIONS]
 
 DESCRIPTION
-
-(TODO ...)
+  bd (bhyve daemon) is a bhyve virtual machine manager, similar to vm-bhyve.
 
 OPTIONS
 `
@@ -67,7 +65,7 @@ OPTIONS
 	singleVmModeArg = "M"
 	dryRunModeArg   = "D"
 
-	singleVmModeDesc = "Automatically pick the vm (only permitted if one vm is running)"
+	singleVmModeDesc = "Single machine mode: automatically pick the VM *if* only one exists"
 
 	vmSocketsPerm = fs.FileMode(0o660)
 )
@@ -104,7 +102,7 @@ func mainWithError() error {
 	}
 
 	if flag.NArg() == 0 {
-		return errors.New("please specify a mode as a non-flag argument or '-h' for more information")
+		return errors.New("please specify a command as a non-flag argument or '-h' for more information")
 	}
 
 	flagSet := flag.NewFlagSet(flag.Arg(0), flag.ExitOnError)
@@ -135,8 +133,8 @@ func mainWithError() error {
 		return restart(flagSet)
 	case "stop":
 		return stop(flagSet)
-	case "pull-cable":
-		return pullCable(flagSet)
+	case "unplug":
+		return unplug(flagSet)
 	case "console":
 		return console(flagSet)
 	default:
@@ -1282,7 +1280,7 @@ func execDaemon(args []string) error {
 	return daemon.Run()
 }
 
-func pullCable(flagSet *flag.FlagSet) error {
+func unplug(flagSet *flag.FlagSet) error {
 	// doNotFailIfDaemonIsStopped := flagSet.Bool(
 	// 	"",
 	// 	false,
