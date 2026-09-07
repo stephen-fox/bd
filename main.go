@@ -329,7 +329,7 @@ func daemon(flagSet *flag.FlagSet) error {
 		VmName:             vmName,
 		VmVariablesDirPath: vmVariablesDir,
 		AppConfig:          appConfig,
-		SkipLoading:        []config.VariableType{config.PrestartDepVariableType},
+		SkipLoading:        []config.VariableType{config.PrestartVariableType},
 	})
 	if err != nil {
 		return fmt.Errorf("failed to load vm variables - %w", err)
@@ -359,7 +359,7 @@ func daemon(flagSet *flag.FlagSet) error {
 		syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTERM)
 	defer cancelFn()
 
-	err = vmConfig.CreatePrestartDeps(ctx, vmVars)
+	err = vmConfig.CreatePrestarts(ctx, vmVars)
 	if err != nil {
 		return fmt.Errorf("failed to create prestart dependencies - %w", err)
 	}
@@ -367,7 +367,7 @@ func daemon(flagSet *flag.FlagSet) error {
 		cleanupCtx, cancelFn := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancelFn()
 
-		vmConfig.CleanupPrestartDeps(cleanupCtx, vmVars, log.Default())
+		vmConfig.CleanupPrestarts(cleanupCtx, vmVars, log.Default())
 	}()
 
 	err = vmVars.SaveVariableToFs(ctx)

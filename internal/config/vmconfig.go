@@ -27,9 +27,9 @@ const (
 	InsertDiscParam    = "InsertDisc"
 )
 
-// VmConfig::PrestartDep section and its parameters.
+// VmConfig::Prestart section and its parameters.
 const (
-	PrestartDepVmConfigSecgtion = "PrestartDep"
+	PrestartVmConfigSecgtion = "Prestart"
 
 	NameParam        = "Name"
 	CreateExecParam  = "CreateExec"
@@ -62,10 +62,10 @@ func ParseVmConfig(r io.Reader, vmName string) (*VmConfig, error) {
 
 // VmConfig represents a VM's configuration.
 type VmConfig struct {
-	VmName         string
-	General        *VmGeneral
-	VmPrestartDeps []VmPreStartDep
-	BhyveArgs      *BhyveArgs
+	VmName      string
+	General     *VmGeneral
+	VmPrestarts []VmPreStart
+	BhyveArgs   *BhyveArgs
 }
 
 // Rules partly implements the ini.Schema interface.
@@ -91,11 +91,11 @@ func (o *VmConfig) OnSection(name string, _ string) (func() (ini.SectionSchema, 
 
 			return o.General, nil
 		}, ini.SchemaRule{Limit: 1}
-	case PrestartDepVmConfigSecgtion:
+	case PrestartVmConfigSecgtion:
 		return func() (ini.SectionSchema, error) {
-			o.VmPrestartDeps = append(o.VmPrestartDeps, VmPreStartDep{})
+			o.VmPrestarts = append(o.VmPrestarts, VmPreStart{})
 
-			return &o.VmPrestartDeps[len(o.VmPrestartDeps)-1], nil
+			return &o.VmPrestarts[len(o.VmPrestarts)-1], nil
 		}, ini.SchemaRule{}
 	case BhyveArgsVmsConfigSection:
 		return func() (ini.SectionSchema, error) {
@@ -113,10 +113,10 @@ func (o *VmConfig) Validate() error {
 	return nil
 }
 
-func (o *VmConfig) CreatePrestartDeps(ctx context.Context, vars *Variables) error {
-	var depsToCleanupOnError []VmPreStartDep
+func (o *VmConfig) CreatePrestarts(ctx context.Context, vars *Variables) error {
+	var depsToCleanupOnError []VmPreStart
 
-	for i, dep := range o.VmPrestartDeps {
+	for i, dep := range o.VmPrestarts {
 		err := dep.Create(ctx, vars)
 		if err != nil {
 			var cleanupErrs []string
@@ -144,7 +144,7 @@ func (o *VmConfig) CreatePrestartDeps(ctx context.Context, vars *Variables) erro
 					strings.Join(cleanupErrs, " ")
 			}
 
-			return fmt.Errorf("failed to create PrestartDep for %s - %w%s",
+			return fmt.Errorf("failed to create %s - %w%s",
 				id, err, cleanupErrStr)
 		}
 
@@ -156,8 +156,8 @@ func (o *VmConfig) CreatePrestartDeps(ctx context.Context, vars *Variables) erro
 	return nil
 }
 
-func (o *VmConfig) CleanupPrestartDeps(ctx context.Context, vars *Variables, logger *log.Logger) {
-	for i, dep := range o.VmPrestartDeps {
+func (o *VmConfig) CleanupPrestarts(ctx context.Context, vars *Variables, logger *log.Logger) {
+	for i, dep := range o.VmPrestarts {
 		err := dep.Cleanup(ctx, vars)
 		if err != nil {
 			var id string
@@ -167,7 +167,7 @@ func (o *VmConfig) CleanupPrestartDeps(ctx context.Context, vars *Variables, log
 				id = fmt.Sprintf("name %q (index: %d)", dep.Name, i)
 			}
 
-			logger.Printf("failed to cleanup PrestartDep %s - %s",
+			logger.Printf("failed to cleanup %s - %s",
 				id, err)
 		}
 	}
@@ -296,19 +296,19 @@ func (o *VmGeneral) Validate() error {
 	return nil
 }
 
-type VmPreStartDep struct {
+type VmPreStart struct {
 	Name         string
 	CreateExecs  [][]string
 	CleanupExecs [][]string
 }
 
 // RequiredParams partly implements the ini.SectionSchema interface.
-func (o *VmPreStartDep) RequiredParams() []string {
+func (o *VmPreStart) RequiredParams() []string {
 	return []string{CreateExecParam}
 }
 
 // OnParam partly implements the ini.SectionSchema interface.
-func (o *VmPreStartDep) OnParam(paramName string) (func(*ini.Param) error, ini.SchemaRule) {
+func (o *VmPreStart) OnParam(paramName string) (func(*ini.Param) error, ini.SchemaRule) {
 	switch paramName {
 	case NameParam:
 		return func(p *ini.Param) error {
@@ -344,11 +344,11 @@ func (o *VmPreStartDep) OnParam(paramName string) (func(*ini.Param) error, ini.S
 }
 
 // Validate partly implements the ini.SectionSchema interface.
-func (o *VmPreStartDep) Validate() error {
+func (o *VmPreStart) Validate() error {
 	return nil
 }
 
-func (o *VmPreStartDep) Create(ctx context.Context, vars *Variables) error {
+func (o *VmPreStart) Create(ctx context.Context, vars *Variables) error {
 	if o.Name != "" {
 		err := isStringSafeForVariableName(o.Name)
 		if err != nil {
@@ -388,7 +388,7 @@ func (o *VmPreStartDep) Create(ctx context.Context, vars *Variables) error {
 		}
 
 		if i == len(o.CreateExecs)-1 && o.Name != "" {
-			err := vars.AddVariable(PrestartDepVariableType, prestartDepConfigVarsPrefix+"_"+o.Name, strings.TrimSpace(string(stdout)))
+			err := vars.AddVariable(PrestartVariableType, prestartConfigVarsPrefix+"_"+o.Name, strings.TrimSpace(string(stdout)))
 			if err != nil {
 				return fmt.Errorf("failed to add variable for %q - %q",
 					o.Name, err)
@@ -399,7 +399,7 @@ func (o *VmPreStartDep) Create(ctx context.Context, vars *Variables) error {
 	return nil
 }
 
-func (o *VmPreStartDep) Cleanup(ctx context.Context, vars *Variables) error {
+func (o *VmPreStart) Cleanup(ctx context.Context, vars *Variables) error {
 	for _, argvOrig := range o.CleanupExecs {
 		argv := make([]string, len(argvOrig))
 		copy(argv, argvOrig)
@@ -465,7 +465,7 @@ func NewVmConfigFile(w io.Writer) error {
 		return fmt.Errorf("failed to generate a mac address - %w", err)
 	}
 
-	const ifaceVariableStr = "${" + prestartDepConfigVarsPrefix + "_tap}"
+	const ifaceVariableStr = "${" + prestartConfigVarsPrefix + "_tap}"
 
 	// Using a separate variable for the config contents so we can preview
 	// it in the editor.
@@ -474,14 +474,14 @@ func NewVmConfigFile(w io.Writer) error {
 ` + SerialConsoleParam + ` = true
 ` + InsertDiscParam + ` = example.iso
 
-[` + PrestartDepVmConfigSecgtion + `]
+[` + PrestartVmConfigSecgtion + `]
 # The following "` + NameParam + ` makes the stdout of the last "` + CreateExecParam + `
 # accessible using a magic variable named "` + ifaceVariableStr + `":
 ` + NameParam + ` = tap
 ` + CreateExecParam + ` = ifconfig tap create description bhyve/${` + vmNameVarName + `}
 ` + CleanupExecParam + ` = ifconfig ` + ifaceVariableStr + ` destroy
 
-# [` + PrestartDepVmConfigSecgtion + `]
+# [` + PrestartVmConfigSecgtion + `]
 # ` + CreateExecParam + ` = ifconfig some_bridge addm ` + ifaceVariableStr + ` private ` + ifaceVariableStr + `
 
 [` + BhyveArgsVmsConfigSection + `]

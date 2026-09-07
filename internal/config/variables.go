@@ -11,8 +11,8 @@ import (
 
 // Variable prefixes / namespaces.
 const (
-	configVarsPrefix            = "BD_CONFIG"
-	prestartDepConfigVarsPrefix = configVarsPrefix + "_PRESTART_DEP"
+	configVarsPrefix         = "BD_CONFIG"
+	prestartConfigVarsPrefix = configVarsPrefix + "_PRESTART"
 )
 
 // Builtin variable names.
@@ -22,6 +22,13 @@ const (
 	vmNameVarName       = configVarsPrefix + "_VM_NAME"
 	vmStorageDirVarName = configVarsPrefix + "_VM_STORAGE_DIR"
 )
+
+const (
+	SystemVariableType   VariableType = "system"
+	PrestartVariableType VariableType = "prestart"
+)
+
+type VariableType string
 
 type LoadVariablesArgs struct {
 	VmName             string
@@ -77,7 +84,7 @@ nextDir:
 		}
 
 		switch varType {
-		case PrestartDepVariableType:
+		case PrestartVariableType:
 			// Keep going.
 		default:
 			continue
@@ -129,13 +136,6 @@ type variableData struct {
 	vType VariableType
 	value string
 }
-
-const (
-	SystemVariableType      VariableType = "system"
-	PrestartDepVariableType VariableType = "prestart-dep"
-)
-
-type VariableType string
 
 func (o *Variables) AddVariable(kind VariableType, varName string, value string) error {
 	existing, alreadyDefined := o.varNamesToData[varName]
@@ -198,7 +198,7 @@ func (o *Variables) SaveVariableToFs(ctx context.Context) error {
 		switch data.vType {
 		case SystemVariableType:
 			continue
-		case PrestartDepVariableType:
+		case PrestartVariableType:
 			// Keep going.
 		default:
 			return fmt.Errorf("unsupported variable type: %q", data.vType)
