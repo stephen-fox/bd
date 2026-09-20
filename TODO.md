@@ -5,13 +5,16 @@
 - Need to cleanup `main.go`, it's too long
 - Do not allow slashes in VM names
 - Fix formatting / spacing of "bd ls"
+- Require VM name to be typed when unplugging power
+- Use mkgd library for daemonization
 
 ## Missing features
 
-- Allow serial console logging to be disabled while having serial console enabled
+- Allow serial console logging to be disabled while having serial console
+  enabled
 - Implement `delete` command for deleting VMs, require user to type the name
   of the VM in
-- Require VM name to be typed when unplugging power
+- Implment `stop-all` command, require user to acknowledge via prompt
 
 ## Documentation
 
