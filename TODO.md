@@ -4,6 +4,7 @@
 
 - Need to cleanup `main.go`, it's too long
 - Do not allow slashes in VM names
+- Fix formatting / spacing of "bd ls"
 
 ## Missing features
 
