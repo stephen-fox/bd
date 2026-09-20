@@ -37,7 +37,7 @@ kldload vmm
 pkg install bhyve-firmware go
 
 # Compile and install bd:
-su -m nobody -c 'cd $(mktemp -d) && export HOME="$(realpath .)" && go install codeberg.org/stephen-fox/bd@latest && realpath' | read tmp && cp -v "${tmp}/go/bin/bd" /usr/local/bin/bd
+tmp="$(su -m nobody -c 'cd $(mktemp -d) && export HOME="$(realpath .)" && go install codeberg.org/stephen-fox/bd@latest && realpath')" && cp -v "${tmp}/go/bin/bd" /usr/local/bin/bd
 
 # Create the required directories and bd configuration file:
 bd install
