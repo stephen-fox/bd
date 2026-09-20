@@ -3,6 +3,7 @@
 ## Cleanup / sweeping
 
 - Need to cleanup `main.go`, it's too long
+- Do not allow slashes in VM names
 
 ## Missing features
 
