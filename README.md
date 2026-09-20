@@ -78,7 +78,7 @@ bd console fbsd-example
 
 ## Project status
 
-I have been using bd for nearly four years to manage virtual machines
+I have been using bd for two and a half years to manage virtual machines
 in jails. However, FreeBSD 15 seemingly broke support for running bhyve
 in a jail. I was already reconsidering my approach to using jails and,
 with the most recent breakage, decided to redesign bd to be more like
