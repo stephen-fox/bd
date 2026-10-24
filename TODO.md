@@ -27,3 +27,8 @@
 - Allow regular users to admin existing VMs
   - May need to restrict the functionality of the "insert disc"
     and various paths that can be passed to bhyve
+
+## Need to investigate
+
+- Is bhyve stderr useful after a VM is started? If so, can we write
+  it to syslog / the Go logger?
