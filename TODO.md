@@ -14,7 +14,7 @@
   enabled
 - Implement `delete` command for deleting VMs, require user to type the name
   of the VM in
-- Implment `stop-all` command, require user to acknowledge via prompt
+- Implement `stop-all` command, require user to acknowledge via prompt
 
 ## Documentation
 
