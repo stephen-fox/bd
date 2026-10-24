@@ -39,7 +39,7 @@ import (
 
 const (
 	appName = "bd"
-	version = "0.1.0"
+	version = "v0.1.1-dev"
 
 	usage = `SYNOPSIS
   ` + appName + ` -h
