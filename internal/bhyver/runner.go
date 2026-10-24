@@ -288,8 +288,6 @@ func (o *Runner) start(ctx context.Context) error {
 		}
 	}
 
-	log.Printf("exec'ing bhyve with argv: %q...", bhyve.String())
-
 	err := bhyve.Start()
 	if err != nil {
 		return fmt.Errorf("failed to start bhyve - %w", err)
