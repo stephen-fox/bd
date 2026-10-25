@@ -380,8 +380,10 @@ func daemon(flagSet *flag.FlagSet) error {
 		return fmt.Errorf("failed to render bhyve args - %w", err)
 	}
 
+	// We use context.Background for the listener because we
+	// want it to service connectins until the moment bd exits.
 	statusListener, err := lctx.ListenUnixPath(
-		ctx,
+		context.Background(),
 		statusSocketPath(vmRuntimeDir),
 		vmSocketsPerm)
 	if err != nil {
@@ -389,18 +391,16 @@ func daemon(flagSet *flag.FlagSet) error {
 	}
 	defer statusListener.Close()
 
-	statusRequests := bhyver.StatusRequestsHandler(ctx, statusListener)
-
+	// We use context.Background for the listener because we
+	// want it to service connectins until the moment bd exits.
 	powerStateListener, err := lctx.ListenUnixPath(
-		ctx,
+		context.Background(),
 		powerStateSocketPath(vmRuntimeDir),
 		vmSocketsPerm)
 	if err != nil {
 		return fmt.Errorf("failed to create power state listener unix socket - %w", err)
 	}
 	defer powerStateListener.Close()
-
-	powerStateRequests := bhyver.PowerStateRequestsHandler(ctx, powerStateListener)
 
 	var optConsoleDaemon *consoleDaemonChild
 	var optConsoleDaemonDone <-chan struct{}
@@ -422,13 +422,16 @@ func daemon(flagSet *flag.FlagSet) error {
 	}
 
 	// TOOD: Send bhyve stderr to syslog.
-	runner := bhyver.StartRunner(ctx, bhyver.RunnerConfig{
-		VmName:           vmName,
-		BhyveArgs:        bhyveArgs,
-		StatusRequests:   statusRequests,
-		PowerRequests:    powerStateRequests,
-		OptConsoleFdConn: optConsoleDaemonConn,
+	runner, err := bhyver.ExecStartRunner(ctx, bhyver.RunnerConfig{
+		VmName:              vmName,
+		BhyveArgs:           bhyveArgs,
+		PowerClientListener: powerStateListener,
+		StatusClientLisener: statusListener,
+		OptConsoleFdConn:    optConsoleDaemonConn,
 	})
+	if err != nil {
+		return fmt.Errorf("failed to start bhyve runner - %w", err)
+	}
 
 	// Wait to see if runner exits due to a bhyve error.
 	select {
@@ -1184,28 +1187,49 @@ func stop(flagSet *flag.FlagSet) error {
 		return err
 	}
 
+	vmStatusSocketPath := statusSocketPath(vmRuntimeDirPath(vmName))
+
+	statusConn, err := net.Dial("unix", vmStatusSocketPath)
+	if err != nil {
+		return fmt.Errorf("failed to open status unix socket (is the vm currently running?) - %w", err)
+	}
+	defer statusConn.Close()
+
+	statusScanner := bufio.NewScanner(statusConn)
+
 	vmRuntimeDir := vmRuntimeDirPath(vmName)
 
-	conn, err := net.Dial("unix", powerStateSocketPath(vmRuntimeDir))
+	powerConn, err := net.Dial("unix", powerStateSocketPath(vmRuntimeDir))
 	if err != nil {
 		return fmt.Errorf("failed to open power state unix socket (is the vm currently running?) - %w", err)
 	}
-	defer conn.Close()
+	defer powerConn.Close()
 
-	_, err = conn.Write([]byte(bhyver.AcpiOffPowerState.String() + "\n"))
+	_, err = powerConn.Write([]byte(bhyver.AcpiOffPowerState.String() + "\n"))
 	if err != nil {
 		return err
 	}
 
-	scanner := bufio.NewScanner(conn)
+	powerScanner := bufio.NewScanner(powerConn)
 
-	if !scanner.Scan() {
-		return scanner.Err()
+	if !powerScanner.Scan() {
+		return powerScanner.Err()
 	}
 
-	errMsg := scanner.Text()
+	errMsg := powerScanner.Text()
 	if errMsg != "" {
 		return errors.New(errMsg)
+	}
+
+	for statusScanner.Scan() {
+		status := statusScanner.Text()
+
+		switch {
+		case strings.HasPrefix(status, "error: "):
+			return errors.New(status)
+		case status == "stopped":
+			return nil
+		}
 	}
 
 	return nil
