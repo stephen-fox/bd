@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"time"
 )
 
 // ListenUnixPath creates a Unix socket at the provided file path and
@@ -50,6 +51,7 @@ func FromFileDescriptor(ctx context.Context, fd uintptr, optName string) (*Liste
 // provided net.Listener.
 func FromNetListener(ctx context.Context, listener net.Listener) *ListenerCtx {
 	l := &ListenerCtx{
+		ctx:      ctx,
 		listener: listener,
 		conns:    make(chan net.Conn),
 		done:     make(chan struct{}),
@@ -67,6 +69,7 @@ func FromNetListener(ctx context.Context, listener net.Listener) *ListenerCtx {
 // Both it and the inner net.Listener can be shutdown by calling
 // the Close method or by canceling the parent context.Context.
 type ListenerCtx struct {
+	ctx      context.Context
 	listener net.Listener
 	conns    chan net.Conn
 	done     chan struct{}
@@ -76,6 +79,25 @@ type ListenerCtx struct {
 // Close closes the inner net.Listener.
 func (o *ListenerCtx) Close() error {
 	return o.listener.Close()
+}
+
+// Serve blocks and executes the fn function when a new connection
+// is accepted by the inner listener. The fn function receives the
+// ListenerCtx as a context.Context along with the new connection.
+//
+// Callers can serve connections in the background by running:
+// "go ListenerCtx.Serve"
+//
+// This function unblocks when the ListenerCtx is closed.
+func (o *ListenerCtx) Serve(fn func(context.Context, net.Conn) error) {
+	for {
+		select {
+		case <-o.Done():
+			return
+		case conn := <-o.Conns():
+			go fn(o, conn)
+		}
+	}
 }
 
 // Conns returns a channel that receives newly-accepted net.Conn objects
@@ -97,6 +119,16 @@ func (o *ListenerCtx) Err() error {
 	return o.err
 }
 
+// Deadline implements the context.Context's Deadline method.
+func (o *ListenerCtx) Deadline() (time.Time, bool) {
+	return o.ctx.Deadline()
+}
+
+// Value implements the context.Context's Value method.
+func (o *ListenerCtx) Value(key any) any {
+	return o.ctx.Value(key)
+}
+
 func (o *ListenerCtx) loop(ctx context.Context) {
 	defer func() {
 		if o.err == nil {
@@ -114,9 +146,11 @@ func (o *ListenerCtx) loop(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			o.err = ctx.Err()
+
 			if conn != nil {
 				_ = conn.Close()
 			}
+
 			return
 		default:
 			// Keep going.
@@ -124,13 +158,16 @@ func (o *ListenerCtx) loop(ctx context.Context) {
 
 		if err != nil {
 			o.err = err
+
 			return
 		}
 
 		select {
 		case <-ctx.Done():
 			o.err = ctx.Err()
+
 			_ = conn.Close()
+
 			return
 		case o.conns <- conn:
 			// OK.
