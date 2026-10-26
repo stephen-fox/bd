@@ -488,6 +488,11 @@ func (o *consoleDaemonChild) Kill() error {
 }
 
 func execConsoleDaemon(ctx context.Context, vmDirPath string) (*consoleDaemonChild, error) {
+	exePath, err := os.Executable()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get current process' executable file path - %w", err)
+	}
+
 	runAsUID, runAsGID, err := lookupUser("nobody")
 	if err != nil {
 		return nil, fmt.Errorf("failed to lookup run as user - %w", err)
@@ -537,7 +542,7 @@ func execConsoleDaemon(ctx context.Context, vmDirPath string) (*consoleDaemonChi
 		}
 	}()
 
-	consoleDaemon := exec.Command(os.Args[0], "console-daemon")
+	consoleDaemon := exec.Command(exePath, "console-daemon")
 
 	stdoutPipe, err := consoleDaemon.StdoutPipe()
 	if err != nil {
