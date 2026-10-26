@@ -63,7 +63,7 @@ bd new fbsd-example
 
 # Edit the configuration file and change the "InsertDisc" parameter's
 # value to be: FreeBSD-15.1-RELEASE-amd64-disc1.iso
-vim /usr/local/etc/bd/vm-configs/fbsd-example/vm.conf
+/zroot/vms/fbsd-example/vm.conf
 
 bd start fbsd-example
 

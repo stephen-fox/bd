@@ -39,7 +39,7 @@ import (
 
 const (
 	appName = "bd"
-	version = "v0.1.1-dev"
+	version = "v0.2.0-dev"
 
 	usage = `SYNOPSIS
   ` + appName + ` -h
@@ -72,9 +72,8 @@ OPTIONS
 
 // Various directory and configuration file paths.
 const (
-	appConfigDirPath         = "/usr/local/etc/" + appName
-	appConfigFilePath        = appConfigDirPath + "/" + appName + ".conf"
-	topLevelVmConfigsDirPath = appConfigDirPath + "/vm-configs"
+	appConfigDirPath  = "/usr/local/etc/" + appName
+	appConfigFilePath = appConfigDirPath + "/" + appName + ".conf"
 
 	appRuntimeDirPath          = "/usr/local/var/" + appName
 	topLevelVmVariablesDirPath = appRuntimeDirPath + "/vm-variables"
@@ -333,7 +332,7 @@ func daemon(flagSet *flag.FlagSet) error {
 		return fmt.Errorf("failed to load vm variables - %w", err)
 	}
 
-	vmConfig, err := loadVmConfig(vmName)
+	vmConfig, err := loadVmConfig(vmName, appConfig)
 	if err != nil {
 		return fmt.Errorf("failed to load vm config for %q - %w",
 			vmName, err)
@@ -785,7 +784,7 @@ func newvm(flagSet *flag.FlagSet) error {
 			vmStorageDir, err)
 	}
 
-	vmConfigPath := vmConfigFilePath(vmName)
+	vmConfigPath := vmConfigFilePath(vmName, appConfig)
 	vmConfigDir := filepath.Dir(vmConfigPath)
 
 	err = maybeDo.MkdirAll(vmConfigDir, 0o755)
@@ -898,11 +897,16 @@ func list(flagSet *flag.FlagSet) error {
 		return err
 	}
 
+	appConfig, err := loadAppConfig()
+	if err != nil {
+		return fmt.Errorf("failed to load app config - %w", err)
+	}
+
 	var status statusGetter
 
 	if flagSet.NArg() == 0 {
-		err := forEachVm(context.Background(), func(_ context.Context, vmName string) error {
-			status.get(vmName)
+		err := forEachVm(context.Background(), appConfig, func(_ context.Context, vmName string) error {
+			status.get(vmName, appConfig)
 
 			return nil
 		})
@@ -911,7 +915,7 @@ func list(flagSet *flag.FlagSet) error {
 		}
 	} else {
 		for _, vmName := range flag.Args() {
-			status.get(vmName)
+			status.get(vmName, appConfig)
 		}
 	}
 
@@ -928,10 +932,10 @@ func list(flagSet *flag.FlagSet) error {
 	return nil
 }
 
-func forEachVm(ctx context.Context, fn func(ctx context.Context, vmName string) error) error {
-	entries, err := os.ReadDir(topLevelVmConfigsDirPath)
+func forEachVm(ctx context.Context, appConfig *config.AppConfig, fn func(ctx context.Context, vmName string) error) error {
+	entries, err := os.ReadDir(appConfig.General.VmsStorageDir)
 	if err != nil {
-		return fmt.Errorf("failed to read virtual machines configuration dir - %w", err)
+		return fmt.Errorf("failed to read virtual machines storage directory - %w", err)
 	}
 
 	for _, entry := range entries {
@@ -963,11 +967,11 @@ type statusGetter struct {
 	oneSuccess bool
 }
 
-func (o *statusGetter) get(vmName string) {
+func (o *statusGetter) get(vmName string, appConfig *config.AppConfig) {
 	o.buf.WriteString(vmName)
 	o.buf.WriteByte('\t')
 
-	status, _, err := vmStatus(vmName, o.verbose)
+	status, _, err := vmStatus(vmName, appConfig, o.verbose)
 	if err != nil {
 		o.buf.WriteString("unknown (")
 		o.buf.WriteString(err.Error())
@@ -1014,8 +1018,13 @@ func status(flagSet *flag.FlagSet) error {
 		return err
 	}
 
+	appConfig, err := loadAppConfig()
+	if err != nil {
+		return fmt.Errorf("failed to load app config - %w", err)
+	}
+
 	if *dumpConfigMode {
-		vmConfig, err := loadVmConfig(vmName)
+		vmConfig, err := loadVmConfig(vmName, appConfig)
 		if err != nil {
 			return err
 		}
@@ -1030,7 +1039,7 @@ func status(flagSet *flag.FlagSet) error {
 		verbose: *verbose,
 	}
 
-	status.get(vmName)
+	status.get(vmName, appConfig)
 
 	fmt.Print(status.buf.String())
 
@@ -1043,8 +1052,8 @@ func status(flagSet *flag.FlagSet) error {
 	return nil
 }
 
-func vmStatus(vmName string, verbose bool) (string, bool, error) {
-	configFilePath := vmConfigFilePath(vmName)
+func vmStatus(vmName string, appConfig *config.AppConfig, verbose bool) (string, bool, error) {
+	configFilePath := vmConfigFilePath(vmName, appConfig)
 
 	_, statErr := os.Stat(configFilePath)
 	switch {
@@ -1091,12 +1100,17 @@ func start(flagSet *flag.FlagSet) error {
 		return err
 	}
 
+	appConfig, err := loadAppConfig()
+	if err != nil {
+		return fmt.Errorf("failed to load app config - %w", err)
+	}
+
 	vmName, err := getVmFromFlagsOrSingleVmMode(flagSet, singleVmMode)
 	if err != nil {
 		return err
 	}
 
-	_, gotResponse, _ := vmStatus(vmName, false)
+	_, gotResponse, _ := vmStatus(vmName, appConfig, false)
 	if gotResponse {
 		return fmt.Errorf("vm is already running")
 	}
@@ -1112,11 +1126,16 @@ func autostart(flagSet *flag.FlagSet) error {
 		return err
 	}
 
+	appConfig, err := loadAppConfig()
+	if err != nil {
+		return fmt.Errorf("failed to load app config - %w", err)
+	}
+
 	var autostartableVms []string
 	var failedVms []string
 
-	err = forEachVm(context.Background(), func(_ context.Context, vmName string) error {
-		vmConfig, err := loadVmConfig(vmName)
+	err = forEachVm(context.Background(), appConfig, func(_ context.Context, vmName string) error {
+		vmConfig, err := loadVmConfig(vmName, appConfig)
 		if err != nil {
 			failedVms = append(failedVms, vmName)
 			log.Printf("autostart: %q - failed to load config - %s", vmName, err)
@@ -1128,7 +1147,7 @@ func autostart(flagSet *flag.FlagSet) error {
 			return nil
 		}
 
-		_, gotResponse, _ := vmStatus(vmName, false)
+		_, gotResponse, _ := vmStatus(vmName, appConfig, false)
 		if gotResponse {
 			log.Printf("autostart: %q - skipping because vm is already running", vmName)
 
@@ -1254,9 +1273,14 @@ func restart(flagSet *flag.FlagSet) error {
 		return err
 	}
 
+	appConfig, err := loadAppConfig()
+	if err != nil {
+		return fmt.Errorf("failed to load app config - %w", err)
+	}
+
 	vmRuntimeDir := vmRuntimeDirPath(vmName)
 
-	_, gotResponse, _ := vmStatus(vmName, false)
+	_, gotResponse, _ := vmStatus(vmName, appConfig, false)
 
 	if gotResponse {
 		conn, err := net.Dial("unix", powerStateSocketPath(vmRuntimeDir))
@@ -1549,15 +1573,15 @@ func loadAppConfig() (*config.AppConfig, error) {
 	return appConfig, nil
 }
 
-func loadVmConfig(vmName string) (*config.VmConfig, error) {
-	configDir := vmConfigDirPath(vmName)
+func loadVmConfig(vmName string, appConfig *config.AppConfig) (*config.VmConfig, error) {
+	configPath := vmConfigFilePath(vmName, appConfig)
+
+	configDir := filepath.Dir(configPath)
 
 	_, err := os.Stat(configDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to stat vm config dir (does the vm exist?) - %w", err)
 	}
-
-	configPath := vmConfigFilePath(vmName)
 
 	f, err := os.Open(configPath)
 	if err != nil {
@@ -1573,12 +1597,8 @@ func loadVmConfig(vmName string) (*config.VmConfig, error) {
 	return vmConfig, nil
 }
 
-func vmConfigFilePath(vmName string) string {
-	return filepath.Join(vmConfigDirPath(vmName), "vm.conf")
-}
-
-func vmConfigDirPath(vmName string) string {
-	return filepath.Join(topLevelVmConfigsDirPath, vmName)
+func vmConfigFilePath(vmName string, appConfig *config.AppConfig) string {
+	return filepath.Join(appConfig.General.VmsStorageDir, vmName, "vm.conf")
 }
 
 func vmStorageDirPath(vmName string, appConfig *config.AppConfig) string {

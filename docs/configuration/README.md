@@ -36,7 +36,7 @@ VmsStorageDir = /zroot/vms
 
 ## Virtual machine configuration
 
-Location: `/usr/local/etc/bd/vm-configs/VM_NAME/vm.conf`
+Location: `VMS_STORAGE_DIR/VM_NAME/vm.conf`
 
 Each virtual machine is configured using its own `vm.conf` file. This file
 supports referencing variables defined by both bd and the user. Variables
