@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -30,8 +31,8 @@ func ListenUnixPath(ctx context.Context, filePath string, perm os.FileMode) (*Li
 	return FromNetListener(ctx, listener), nil
 }
 
-// FromFileDescriptor converts the provided file descriptor to a net.Listener
-// and wraps it with a ListenerCtx.
+// FromFileDescriptor converts the provided file descriptor to
+// a net.Listener and wraps it with a ListenerCtx.
 func FromFileDescriptor(ctx context.Context, fd uintptr, optName string) (*ListenerCtx, error) {
 	file := os.NewFile(fd, optName)
 	if file == nil {
@@ -50,16 +51,27 @@ func FromFileDescriptor(ctx context.Context, fd uintptr, optName string) (*Liste
 // FromNetListener returns a new ListenerCtx that wraps the
 // provided net.Listener.
 func FromNetListener(ctx context.Context, listener net.Listener) *ListenerCtx {
-	l := &ListenerCtx{
+	var cancelFn func()
+
+	ctx, cancelFn = context.WithCancel(ctx)
+
+	listenerCtx := &ListenerCtx{
 		ctx:      ctx,
+		cancelFn: cancelFn,
 		listener: listener,
 		conns:    make(chan net.Conn),
 		done:     make(chan struct{}),
 	}
 
-	go l.loop(ctx)
+	go func() {
+		<-ctx.Done()
 
-	return l
+		_ = listenerCtx.Close()
+	}()
+
+	go listenerCtx.loop()
+
+	return listenerCtx
 }
 
 // ListenerCtx wraps a net.Listener, providing a more async-friendly
@@ -70,6 +82,8 @@ func FromNetListener(ctx context.Context, listener net.Listener) *ListenerCtx {
 // the Close method or by canceling the parent context.Context.
 type ListenerCtx struct {
 	ctx      context.Context
+	once     sync.Once
+	cancelFn func()
 	listener net.Listener
 	conns    chan net.Conn
 	done     chan struct{}
@@ -78,6 +92,8 @@ type ListenerCtx struct {
 
 // Close closes the inner net.Listener.
 func (o *ListenerCtx) Close() error {
+	o.once.Do(o.cancelFn)
+
 	return o.listener.Close()
 }
 
@@ -92,7 +108,7 @@ func (o *ListenerCtx) Close() error {
 func (o *ListenerCtx) Serve(fn func(context.Context, net.Conn) error) {
 	for {
 		select {
-		case <-o.Done():
+		case <-o.ctx.Done():
 			return
 		case conn := <-o.Conns():
 			go fn(o, conn)
@@ -106,8 +122,8 @@ func (o *ListenerCtx) Conns() <-chan net.Conn {
 	return o.conns
 }
 
-// Done returns a channel that is closed when the inner net.Listener is closed
-// or the parent context.Context is marked as done.
+// Done returns a channel that is closed when the inner net.Listener is
+// closed or the parent context.Context is marked as done.
 func (o *ListenerCtx) Done() <-chan struct{} {
 	return o.done
 }
@@ -129,13 +145,13 @@ func (o *ListenerCtx) Value(key any) any {
 	return o.ctx.Value(key)
 }
 
-func (o *ListenerCtx) loop(ctx context.Context) {
+func (o *ListenerCtx) loop() {
 	defer func() {
 		if o.err == nil {
 			o.err = errors.New("exited due to unknown error")
 		}
 
-		_ = o.listener.Close()
+		_ = o.Close()
 
 		close(o.done)
 	}()
@@ -144,8 +160,8 @@ func (o *ListenerCtx) loop(ctx context.Context) {
 		conn, err := o.listener.Accept()
 
 		select {
-		case <-ctx.Done():
-			o.err = ctx.Err()
+		case <-o.ctx.Done():
+			o.err = o.ctx.Err()
 
 			if conn != nil {
 				_ = conn.Close()
@@ -163,8 +179,8 @@ func (o *ListenerCtx) loop(ctx context.Context) {
 		}
 
 		select {
-		case <-ctx.Done():
-			o.err = ctx.Err()
+		case <-o.ctx.Done():
+			o.err = o.ctx.Err()
 
 			_ = conn.Close()
 
