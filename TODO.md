@@ -12,8 +12,6 @@
 
 - Allow serial console logging to be disabled while having serial console
   enabled
-- Implement `delete` command for deleting VMs, require user to type the name
-  of the VM in
 - Implement `stop-all` command, require user to acknowledge via prompt
 
 ## Documentation
