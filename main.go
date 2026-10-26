@@ -54,6 +54,7 @@ const (
   ` + appName + ` [OPTIONS] unplug [UNPLUG-OPTIONS] VM-NAME
   ` + appName + ` [OPTIONS] autostart [AUTOSTART-OPTIONS]
   ` + appName + ` [OPTIONS] console [CONSOLE-OPTIONS] VM-NAME
+  ` + appName + ` [OPTIONS] delete [DELETE-OPTIONS] VM-NAME
   ` + appName + ` [OPTIONS] genmac [GENMAC-OPTIONS]
 
 DESCRIPTION
@@ -136,6 +137,8 @@ func mainWithError() error {
 		return unplug(flagSet)
 	case "console":
 		return console(flagSet)
+	case "delete":
+		return deletevm(flagSet)
 	default:
 		return fmt.Errorf("unknown command: '%s'", flag.Arg(0))
 	}
@@ -1380,6 +1383,76 @@ func unplug(flagSet *flag.FlagSet) error {
 	if errMsg != "" {
 		return errors.New(errMsg)
 	}
+
+	return nil
+}
+
+func deletevm(flagSet *flag.FlagSet) error {
+	_ = flagSet.Parse(os.Args[2:])
+
+	err := checkIfRunningAsRoot()
+	if err != nil {
+		return err
+	}
+
+	switch flagSet.NArg() {
+	case 0:
+		return fmt.Errorf("please specify the name of the vm to delete as a non-flag argument")
+	case 1:
+		// OK.
+	default:
+		return fmt.Errorf("please specify only one non-flag argument (the vm to delete)")
+	}
+
+	appConfig, err := loadAppConfig()
+	if err != nil {
+		return fmt.Errorf("failed to load app config - %w", err)
+	}
+
+	vmName := flagSet.Arg(0)
+
+	status, _, err := vmStatus(vmName, appConfig, false)
+	if err != nil {
+		return fmt.Errorf("failed to get vm status - %w", err)
+	}
+
+	if status != "stopped" {
+		return fmt.Errorf("please stop the vm before deleting it (current status is %q)",
+			status)
+	}
+
+	os.Stderr.WriteString("WARNING - this will delete vm '" + vmName +
+		"' - are you sure? (input the vm name and press enter to start deletion)\n")
+
+	scanner := bufio.NewScanner(os.Stdin)
+
+	scanner.Scan()
+
+	if scanner.Err() != nil {
+		return fmt.Errorf("failed to read from stdin - %w", scanner.Err())
+	}
+
+	if scanner.Text() != vmName {
+		return fmt.Errorf("the vm name you entered does not match - skipping deletion")
+	}
+
+	zfsId := strings.TrimPrefix(appConfig.General.VmsStorageDir+"/"+vmName, "/")
+
+	zfsDestroy := exec.Command("/sbin/zfs", "destroy", zfsId)
+
+	out, err := zfsDestroy.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to destroy vm's zfs dataset at %q - %w (output: %s)",
+			zfsId, err, out)
+	}
+
+	//runtimeDir := vmRuntimeDirPath(vmName)
+
+	//if runtimeDir != "/" {
+	//  os.RemoveAll(runtimeDir)
+	//}
+
+	os.Stderr.WriteString("'" + vmName + "' deleted\n")
 
 	return nil
 }

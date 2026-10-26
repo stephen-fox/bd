@@ -74,6 +74,11 @@ Enter
 .
 ```
 
+## `delete VM_NAME`
+
+Deletes a virtual machine, including its configuration file, disk image(s),
+UEFI variables, and all other associated files. This command is destructive.
+
 ##  `genmac`
 
 Generates a random MAC address and writes it to standard output.
