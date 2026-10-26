@@ -208,7 +208,7 @@ func (o *Runner) loopWithError(ctx context.Context) error {
 	}()
 
 	const shutdownTimeout = time.Minute
-	var shutdownTimedout *time.Timer
+	var shutdownTimedout <-chan time.Time
 
 	var finalErr error
 
@@ -220,12 +220,12 @@ loop:
 		log.Printf("shutting down due to %v - waiting %s for bhyve to exit...",
 			finalErr, shutdownTimeout.String())
 
-		shutdownTimedout = time.NewTimer(shutdownTimeout)
+		shutdownTimedout = time.After(shutdownTimeout)
 
 		if o.status == bhyveStatusRunning {
 			_ = o.acpiPowerOff()
 		}
-	case <-shutdownTimedout.C:
+	case <-shutdownTimedout:
 		log.Printf("pulling power cable because bhyve process did not exit after %s...",
 			shutdownTimeout)
 
