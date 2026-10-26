@@ -57,7 +57,7 @@ After installing bd, we can create a virtual machine like this:
 ```sh
 # Note: All commands below should be run as the root user.
 
-su -m nobody -c 'fetch -o - https://download.freebsd.org/releases/amd64/amd64/ISO-IMAGES/15.1/FreeBSD-15.1-RELEASE-amd64-disc1.iso' | cat > /zroot/os-images/FreeBSD-15.1-RELEASE-amd64-disc1.iso
+su -m nobody -c 'fetch -o - https://download.freebsd.org/releases/amd64/amd64/ISO-IMAGES/15.1/FreeBSD-15.1-RELEASE-amd64-disc1.iso' > /zroot/os-images/FreeBSD-15.1-RELEASE-amd64-disc1.iso
 
 bd new fbsd-example
 
