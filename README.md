@@ -57,16 +57,20 @@ After installing bd, we can create a virtual machine like this:
 ```sh
 # Note: All commands below should be run as the root user.
 
+# Download the FreeBSD installer to the boot media directory:
 su -m nobody -c 'fetch -o - https://download.freebsd.org/releases/amd64/amd64/ISO-IMAGES/15.1/FreeBSD-15.1-RELEASE-amd64-disc1.iso' > /zroot/os-images/FreeBSD-15.1-RELEASE-amd64-disc1.iso
 
+# Create a new VM:
 bd new fbsd-example
 
 # Edit the configuration file and change the "InsertDisc" parameter's
 # value to be: FreeBSD-15.1-RELEASE-amd64-disc1.iso
-/zroot/vms/fbsd-example/vm.conf
+vim /zroot/vms/fbsd-example/vm.conf
 
+# Start the VM:
 bd start fbsd-example
 
+# View the VM's serial console:
 bd console fbsd-example
 ```
 
