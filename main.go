@@ -742,6 +742,21 @@ func newvm(flagSet *flag.FlagSet) error {
 		return err
 	}
 
+	switch {
+	case strings.Contains(vmName, " "):
+		return fmt.Errorf("vm name cannot contain spaces")
+	case strings.Contains(vmName, "/"):
+		return fmt.Errorf("vm name cannot contain slashes")
+	}
+
+	testPath := filepath.Join("test", "example", vmName)
+	expected := "/test/example/" + vmName
+
+	if testPath != expected {
+		return fmt.Errorf("vm name contains disallowed characters - expected test path to be: %q - got %q",
+			expected, testPath)
+	}
+
 	appConfig, err := loadAppConfig()
 	if err != nil {
 		return err
