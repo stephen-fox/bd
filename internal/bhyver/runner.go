@@ -284,9 +284,12 @@ loop:
 func (o *Runner) handlePowerStateRequest(req *PowerStateRequest) (clientMsg string, err error) {
 	log.Printf("received power state request - new state: %q", req.newState.String())
 
+	const timeSpec = time.RFC822
+
 	switch req.newState {
 	case AcpiOffPowerState:
-		o.status = "shutting down... (acpi power button pressed)"
+		o.status = fmt.Sprintf("shutting down... (acpi power button pressed at %s)",
+			time.Now().Format(timeSpec))
 
 		err := o.acpiPowerOff()
 		if err != nil {
@@ -295,7 +298,8 @@ func (o *Runner) handlePowerStateRequest(req *PowerStateRequest) (clientMsg stri
 
 		return "", nil
 	case PullPowerCablePowerState:
-		o.status = "shutting down... (power cabled pulled)"
+		o.status = fmt.Sprintf("shutting down... (power cable unplugged at %s)",
+			time.Now().Format(timeSpec))
 
 		err := o.pullPowerCable()
 		if err != nil {
