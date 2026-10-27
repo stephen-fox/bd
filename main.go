@@ -313,7 +313,7 @@ func daemon(flagSet *flag.FlagSet) error {
 		return fmt.Errorf("failed to load application config - %w", err)
 	}
 
-	vmVariablesDir := filepath.Join(topLevelVmVariablesDirPath, vmName)
+	vmVariablesDir := vmVariablesDirPath(vmName)
 
 	err = os.MkdirAll(vmVariablesDir, 0o755)
 	if err != nil {
@@ -756,7 +756,7 @@ func newvm(flagSet *flag.FlagSet) error {
 
 	var undo undoFns
 
-	vmVariablesDir := filepath.Join(topLevelVmVariablesDirPath, vmName)
+	vmVariablesDir := vmVariablesDirPath(vmName)
 
 	err = maybeDo.Mkdir(vmVariablesDir, 0o700)
 	if err != nil {
@@ -1446,11 +1446,25 @@ func deletevm(flagSet *flag.FlagSet) error {
 			zfsId, err, out)
 	}
 
-	//runtimeDir := vmRuntimeDirPath(vmName)
+	runtimeDir := filepath.Clean(vmRuntimeDirPath(vmName))
 
-	//if runtimeDir != "/" {
-	//  os.RemoveAll(runtimeDir)
-	//}
+	if !strings.HasPrefix(runtimeDir, topLevelVmRuntimeDirPath) || runtimeDir == topLevelVmRuntimeDirPath {
+		return fmt.Errorf("warning: vm runtime dir was set to %q - "+
+			"refusing to delete it, this is a bug!",
+			runtimeDir)
+	}
+
+	_ = os.RemoveAll(runtimeDir)
+
+	variablesDir := filepath.Clean(vmVariablesDirPath(vmName))
+
+	if !strings.HasPrefix(variablesDir, topLevelVmVariablesDirPath) || variablesDir == topLevelVmVariablesDirPath {
+		return fmt.Errorf("warning: vm variables dir was set to %q - "+
+			"refusing to delete it, this is a bug!",
+			variablesDir)
+	}
+
+	_ = os.RemoveAll(variablesDir)
 
 	os.Stderr.WriteString("'" + vmName + "' deleted\n")
 
@@ -1628,6 +1642,10 @@ func powerStateSocketPath(runtimeDirPath string) string {
 
 func vmRuntimeDirPath(vmName string) string {
 	return filepath.Join(topLevelVmRuntimeDirPath, vmName)
+}
+
+func vmVariablesDirPath(vmName string) string {
+	return filepath.Join(topLevelVmVariablesDirPath, vmName)
 }
 
 func loadAppConfig() (*config.AppConfig, error) {
