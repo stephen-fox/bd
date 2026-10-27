@@ -749,7 +749,7 @@ func newvm(flagSet *flag.FlagSet) error {
 		return fmt.Errorf("vm name cannot contain slashes")
 	}
 
-	testPath := filepath.Join("test", "example", vmName)
+	testPath := filepath.Join("/", "test", "example", vmName)
 	expected := "/test/example/" + vmName
 
 	if testPath != expected {
