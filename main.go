@@ -19,6 +19,7 @@ import (
 	"os/signal"
 	"os/user"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -914,7 +915,7 @@ func list(flagSet *flag.FlagSet) error {
 
 	if flagSet.NArg() == 0 {
 		err := forEachVm(context.Background(), appConfig, func(_ context.Context, vmName string) error {
-			status.get(vmName, appConfig)
+			status.Get(vmName, appConfig)
 
 			return nil
 		})
@@ -923,15 +924,15 @@ func list(flagSet *flag.FlagSet) error {
 		}
 	} else {
 		for _, vmName := range flag.Args() {
-			status.get(vmName, appConfig)
+			status.Get(vmName, appConfig)
 		}
 	}
 
-	if status.buf.Len() == 0 {
+	if status.NumStatuses() == 0 {
 		return nil
 	}
 
-	fmt.Print(status.buf.String())
+	fmt.Print(status.String())
 
 	if !status.oneSuccess {
 		os.Exit(1)
@@ -970,26 +971,70 @@ func forEachVm(ctx context.Context, appConfig *config.AppConfig, fn func(ctx con
 }
 
 type statusGetter struct {
-	buf        bytes.Buffer
-	verbose    bool
-	oneSuccess bool
+	statuses       []vmStatusInfo
+	longestNameLen int
+	verbose        bool
+	oneSuccess     bool
 }
 
-func (o *statusGetter) get(vmName string, appConfig *config.AppConfig) {
-	o.buf.WriteString(vmName)
-	o.buf.WriteByte('\t')
+type vmStatusInfo struct {
+	name   string
+	status string
+}
+
+func (o *statusGetter) Get(vmName string, appConfig *config.AppConfig) {
+	o.statuses = append(o.statuses, vmStatusInfo{
+		name: vmName,
+	})
+
+	if len(vmName) > o.longestNameLen {
+		o.longestNameLen = len(vmName)
+	}
 
 	status, _, err := vmStatus(vmName, appConfig, o.verbose)
 	if err != nil {
-		o.buf.WriteString("unknown (")
-		o.buf.WriteString(err.Error())
-		o.buf.WriteString(")")
+		o.statuses[len(o.statuses)-1].status = "unknown (" + err.Error() + ")"
 	} else {
-		o.buf.WriteString(status)
+		o.statuses[len(o.statuses)-1].status = status
+
 		o.oneSuccess = true
 	}
+}
 
-	o.buf.WriteByte('\n')
+func (o *statusGetter) NumStatuses() int {
+	return len(o.statuses)
+}
+
+func (o *statusGetter) String() string {
+	if len(o.statuses) == 0 {
+		return ""
+	}
+
+	sort.SliceStable(o.statuses, func(i, j int) bool {
+		return o.statuses[i].name < o.statuses[j].name
+	})
+
+	var buf bytes.Buffer
+
+	const minSpaces = 1
+
+	for _, status := range o.statuses {
+		numSpaces := minSpaces
+
+		if len(status.name) < o.longestNameLen {
+			numSpaces = o.longestNameLen - len(status.name) + minSpaces
+		}
+
+		buf.WriteString(status.name)
+
+		buf.WriteString(strings.Repeat(" ", numSpaces))
+
+		buf.WriteString(status.status)
+
+		buf.WriteByte('\n')
+	}
+
+	return buf.String()
 }
 
 func status(flagSet *flag.FlagSet) error {
@@ -1047,9 +1092,9 @@ func status(flagSet *flag.FlagSet) error {
 		verbose: *verbose,
 	}
 
-	status.get(vmName, appConfig)
+	status.Get(vmName, appConfig)
 
-	fmt.Print(status.buf.String())
+	fmt.Print(status.String())
 
 	if status.oneSuccess {
 		return nil
