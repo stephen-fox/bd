@@ -82,7 +82,7 @@ func RunApp() error {
 		fmt.Println(version)
 		return nil
 	case "install":
-		return doInstall(flagSet)
+		return install(flagSet)
 	case "genmac":
 		return genmac()
 	case "daemon":

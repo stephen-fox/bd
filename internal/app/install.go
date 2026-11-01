@@ -9,7 +9,7 @@ import (
 	"codeberg.org/stephen-fox/bd/internal/config"
 )
 
-func doInstall(flagSet *flag.FlagSet) error {
+func install(flagSet *flag.FlagSet) error {
 	_ = flagSet.Parse(os.Args[2:])
 
 	err := checkIfRunningAsRoot()
