@@ -2,7 +2,6 @@
 
 ## Cleanup / sweeping
 
-- Need to cleanup `main.go`, it's too long
 - Require VM name to be typed when unplugging power
 - Use mkgd library for daemonization
 
