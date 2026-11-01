@@ -65,5 +65,5 @@ func restart(flagSet *flag.FlagSet) error {
 		conn.Close()
 	}
 
-	return execDaemon([]string{vmName})
+	return execStartDaemon([]string{vmName})
 }

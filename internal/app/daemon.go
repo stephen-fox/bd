@@ -239,7 +239,7 @@ func daemon(flagSet *flag.FlagSet) error {
 	if vmConfig.General.SerialConsole {
 		log.Println("setting up console daemon...")
 
-		optConsoleDaemon, err = execConsoleDaemon(ctx, vmRuntimeDir)
+		optConsoleDaemon, err = execStartConsoleDaemon(ctx, vmRuntimeDir)
 		if err != nil {
 			return fmt.Errorf("failed to start console daemon - %w", err)
 		}
@@ -318,7 +318,13 @@ func (o *consoleDaemonChild) Kill() error {
 	return o.execCmd.Process.Kill()
 }
 
-func execConsoleDaemon(ctx context.Context, vmDirPath string) (*consoleDaemonChild, error) {
+// execStartConsoleDaemon executes a new instance of the application in
+// console daemon mode and returns an object that controls the state of
+// the new child process.
+//
+// This function only blocks until the console daemon is started and
+// is ready to handle requests.
+func execStartConsoleDaemon(ctx context.Context, vmDirPath string) (*consoleDaemonChild, error) {
 	exePath, err := os.Executable()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get current process' executable file path - %w", err)
@@ -531,7 +537,13 @@ func consoleDaemon(flagSet *flag.FlagSet) error {
 	return err
 }
 
-func execDaemon(args []string) error {
+// execStartDaemon executes a new instance of the application
+// in daemon mode.
+//
+// In "daemon" mode, the application re-runs itself in the background.
+// That is to say - this function only blocks until the daemon process
+// is finished setting up, at which point this function unblocks.
+func execStartDaemon(args []string) error {
 	exePath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("failed to get current process' executable path - %w", err)

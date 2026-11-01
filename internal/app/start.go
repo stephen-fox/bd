@@ -35,5 +35,5 @@ func start(flagSet *flag.FlagSet) error {
 		return fmt.Errorf("vm is already running")
 	}
 
-	return execDaemon([]string{vmName})
+	return execStartDaemon([]string{vmName})
 }

@@ -49,7 +49,7 @@ func autostart(flagSet *flag.FlagSet) error {
 
 		log.Printf("autostart: %q - starting daemon...", vmName)
 
-		err = execDaemon([]string{vmName})
+		err = execStartDaemon([]string{vmName})
 		if err != nil {
 			failedVms = append(failedVms, vmName)
 			log.Printf("autostart: %q - failed to exec daemon - %s", vmName, err)
