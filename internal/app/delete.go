@@ -45,17 +45,17 @@ func deletevm(flagSet *flag.FlagSet) error {
 	}
 
 	os.Stderr.WriteString("WARNING - this will delete vm '" + vmName +
-		"' - are you sure? (input the vm name and press enter to start deletion)\n")
+		"' - are you sure? (type the vm name and press enter to start deletion)\n> ")
 
-	scanner := bufio.NewScanner(os.Stdin)
+	stdinScanner := bufio.NewScanner(os.Stdin)
 
-	scanner.Scan()
+	stdinScanner.Scan()
 
-	if scanner.Err() != nil {
-		return fmt.Errorf("failed to read from stdin - %w", scanner.Err())
+	if stdinScanner.Err() != nil {
+		return fmt.Errorf("failed to read from stdin - %w", stdinScanner.Err())
 	}
 
-	if scanner.Text() != vmName {
+	if stdinScanner.Text() != vmName {
 		return fmt.Errorf("the vm name you entered does not match - skipping deletion")
 	}
 
