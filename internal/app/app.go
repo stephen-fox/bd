@@ -66,8 +66,17 @@ func RunApp() error {
 	flag.Parse()
 
 	if *displayHelp {
-		_, _ = os.Stderr.WriteString(usage)
+		writer := os.Stderr
+
+		stdoutInfo, _ := os.Stdout.Stat()
+		if stdoutInfo != nil && stdoutInfo.Mode()&os.ModeNamedPipe != 0 {
+			writer = os.Stdout
+			flag.CommandLine.SetOutput(os.Stdout)
+		}
+
+		_, _ = writer.WriteString(usage)
 		flag.PrintDefaults()
+
 		os.Exit(1)
 	}
 
