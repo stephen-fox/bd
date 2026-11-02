@@ -2,7 +2,6 @@
 
 ## Cleanup / sweeping
 
-- Require VM name to be typed when unplugging power
 - Use mkgd library for daemonization
 
 ## Missing features

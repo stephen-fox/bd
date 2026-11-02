@@ -35,6 +35,22 @@ func unplug(flagSet *flag.FlagSet) error {
 		return err
 	}
 
+	os.Stderr.WriteString("WARNING - this will effectively unplug the power from '" +
+		vmName + "' which may result in data loss - are you sure? " +
+		"(type the vm name and press enter to unplug it)\n> ")
+
+	stdinScanner := bufio.NewScanner(os.Stdin)
+
+	stdinScanner.Scan()
+
+	if stdinScanner.Err() != nil {
+		return fmt.Errorf("failed to read from stdin - %w", stdinScanner.Err())
+	}
+
+	if stdinScanner.Text() != vmName {
+		return fmt.Errorf("the vm name you entered does not match - skipping unplug")
+	}
+
 	vmRuntimeDir := vmRuntimeDirPath(vmName)
 
 	conn, err := net.Dial("unix", powerStateSocketPath(vmRuntimeDir))
@@ -48,13 +64,13 @@ func unplug(flagSet *flag.FlagSet) error {
 		return err
 	}
 
-	scanner := bufio.NewScanner(conn)
+	powerScanner := bufio.NewScanner(conn)
 
-	if !scanner.Scan() {
-		return scanner.Err()
+	if !powerScanner.Scan() {
+		return powerScanner.Err()
 	}
 
-	errMsg := scanner.Text()
+	errMsg := powerScanner.Text()
 	if errMsg != "" {
 		return errors.New(errMsg)
 	}
