@@ -30,7 +30,11 @@ func start(flagSet *flag.FlagSet) error {
 		return err
 	}
 
-	_, gotResponse, _ := vmStatus(vmName, appConfig, false)
+	_, gotResponse, err := vmStatus(vmName, appConfig, false)
+	if err != nil {
+		return err
+	}
+
 	if gotResponse {
 		return fmt.Errorf("vm is already running")
 	}

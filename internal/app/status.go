@@ -158,7 +158,7 @@ func vmStatus(vmName string, appConfig *config.AppConfig, verbose bool) (string,
 	case statErr == nil:
 		// Keep going.
 	case errors.Is(statErr, os.ErrNotExist):
-		return "", false, fmt.Errorf("no such vm")
+		return "", false, fmt.Errorf("no such vm: %q", vmName)
 	default:
 		return "", false, statErr
 	}
