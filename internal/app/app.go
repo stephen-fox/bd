@@ -28,6 +28,7 @@ const (
   ` + appName + ` [OPTIONS] start [START-OPTIONS] VM-NAME
   ` + appName + ` [OPTIONS] restart [RESTART-OPTIONS] VM-NAME
   ` + appName + ` [OPTIONS] stop [STOP-OPTIONS] VM-NAME
+  ` + appName + ` [OPTIONS] stopall [STOPALL-OPTIONS]
   ` + appName + ` [OPTIONS] unplug [UNPLUG-OPTIONS] VM-NAME
   ` + appName + ` [OPTIONS] autostart [AUTOSTART-OPTIONS]
   ` + appName + ` [OPTIONS] console [CONSOLE-OPTIONS] VM-NAME
@@ -112,6 +113,8 @@ func RunApp() error {
 		return restart(flagSet)
 	case "stop":
 		return stop(flagSet)
+	case "stopall":
+		return stopall(flagSet)
 	case "unplug":
 		return unplug(flagSet)
 	case "console":

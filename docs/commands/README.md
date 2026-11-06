@@ -36,11 +36,21 @@ executing `stop` followed by `start`.
 Stops a virtual machine with the name `VM_NAME` by simulating a ACPI
 power button press (i.e., a standard, graceful shutdown).
 
+## `stopall`
+
+Stops all running virtual machines using the same logic as the `stop` command.
+
+The user is prompted to confirm execution of this command due to the
+large blast radius of this command.
+
 ## `unplug VM_NAME`
 
 Stops a virtual machine with the name `VM_NAME` by simulating the power
 cable being unplugged (i.e., a *non-graceful* shutdown). Only use this
 if a VM is unresponsive.
+
+The user is prompted to confirm execution of this command to help avoid
+potential data loss.
 
 ## `autostart`
 
@@ -78,6 +88,9 @@ Enter
 
 Deletes a virtual machine, including its configuration file, disk image(s),
 UEFI variables, and all other associated files. This command is destructive.
+
+The user is prompted to confirm execution of this command to help avoid
+accidental data loss.
 
 ##  `genmac`
 

@@ -8,7 +8,6 @@
 
 - Allow serial console logging to be disabled while having serial console
   enabled
-- Implement `stop-all` command, require user to acknowledge via prompt
 
 ## Documentation
 

@@ -31,6 +31,10 @@ func stop(flagSet *flag.FlagSet) error {
 		return err
 	}
 
+	return stopVm(vmName)
+}
+
+func stopVm(vmName string) error {
 	vmStatusSocketPath := statusSocketPath(vmRuntimeDirPath(vmName))
 
 	statusConn, err := net.Dial("unix", vmStatusSocketPath)
