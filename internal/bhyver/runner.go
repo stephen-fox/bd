@@ -38,7 +38,9 @@ type RunnerConfig struct {
 	OptConsoleFdConn *net.UnixConn
 }
 
-// ExecStartRunner instantiates a Runner and starts bhyve.
+// ExecStartRunner instantiates a Runner and starts the VM's bhyve
+// process. The VM is shutdown when the provided context.Context
+// is cancelled.
 func ExecStartRunner(ctx context.Context, config RunnerConfig) (*Runner, error) {
 	runner := &Runner{
 		config:          config,
@@ -184,8 +186,8 @@ func (o *Runner) startShutdown(reason error) {
 func (o *Runner) loop(ctx context.Context) {
 	defer close(o.done)
 
-	// Ensure any child go routines are killed if
-	// an error occurs.
+	// Ensure any child go routines are cancelled when this
+	// function exits.
 	var cancelFn func()
 	ctx, cancelFn = context.WithCancel(ctx)
 	defer cancelFn()
